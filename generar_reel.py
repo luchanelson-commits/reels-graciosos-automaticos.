@@ -1,7 +1,5 @@
 import os
 import io
-import re
-import math
 import random
 import asyncio
 import subprocess
@@ -10,11 +8,11 @@ from pathlib import Path
 import requests
 import imageio_ffmpeg
 import edge_tts
-from PIL import Image, ImageDraw, ImageFont, ImageEnhance, ImageFilter
+from PIL import Image, ImageDraw, ImageFont, ImageEnhance, ImageOps
 
-# ==================================================
-# CONFIGURACIÓN
-# ==================================================
+# =========================================================
+# CONFIGURACIÓN GENERAL
+# =========================================================
 
 WIDTH = 720
 HEIGHT = 1280
@@ -22,8 +20,8 @@ FPS = 12
 DURATION = 30
 SCENES = 4
 SCENE_SECONDS = DURATION / SCENES
-VOICE = "es-MX-DaliaNeural"
 
+VOICE = "es-MX-DaliaNeural"
 BRAND = "Nelson Lucha Reels Graciosos"
 SIGNATURE = "Nelson Lucha"
 
@@ -36,9 +34,13 @@ AUDIO = OUT / "narracion.mp3"
 for folder in (OUT, FRAMES, PHOTOS):
     folder.mkdir(parents=True, exist_ok=True)
 
-# ==================================================
-# CHISTES CORTOS
-# ==================================================
+HEADERS = {
+    "User-Agent": "NelsonLuchaReels/1.0 (photo retrieval)"
+}
+
+# =========================================================
+# CHISTES
+# =========================================================
 
 JOKES = [
     {
@@ -46,7 +48,7 @@ JOKES = [
         "title": "CUANDO TE DESCUBREN",
         "text": "Yo no fui...",
         "punch": "¡Pero el perro ya confesó! 😂",
-        "voice": "Yo no fui... ¡pero el perro ya confesó."
+        "voice": "Yo no fui... ¡pero el perro ya confesó!"
     },
     {
         "query": "funny cat expression photograph",
@@ -70,7 +72,7 @@ JOKES = [
         "voice": "Hoy sí comienzo la dieta... ¡después de esta última comida!"
     },
     {
-        "query": "funny person reaction photo",
+        "query": "funny person reaction photograph",
         "title": "EL LUNES",
         "text": "Mañana comienzo a hacer ejercicio...",
         "punch": "¡Eso dije el lunes pasado! 😅",
@@ -97,26 +99,38 @@ JOKES = [
         "punch": "¡Y ya no quedó nada! 🤣",
         "voice": "Dije que solo probaría un poquito... ¡y ya no quedó nada!"
     },
+    {
+        "query": "funny surprised dog photograph",
+        "title": "EL SUSTO",
+        "text": "Escuché un ruido en la noche...",
+        "punch": "¡Y desperté hasta al vecino! 😂",
+        "voice": "Escuché un ruido en la noche... ¡y desperté hasta al vecino!"
+    },
+    {
+        "query": "funny cat looking at camera photograph",
+        "title": "MI CARA EL LUNES",
+        "text": "Yo llegando al trabajo...",
+        "punch": "¡Y apenas es lunes! 😹",
+        "voice": "Yo llegando al trabajo... ¡y apenas es lunes!"
+    },
 ]
 
 
-# ==================================================
-# TIPOGRAFÍA
-# ==================================================
+# =========================================================
+# FUENTES
+# =========================================================
 
 def get_font(size, italic=False):
-    candidates = []
-
     if italic:
-        candidates += [
+        candidates = [
             "/usr/share/fonts/truetype/dejavu/DejaVuSans-BoldOblique.ttf",
             "/usr/share/fonts/truetype/liberation2/LiberationSans-BoldItalic.ttf",
         ]
-
-    candidates += [
-        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
-        "/usr/share/fonts/truetype/liberation2/LiberationSans-Bold.ttf",
-    ]
+    else:
+        candidates = [
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+            "/usr/share/fonts/truetype/liberation2/LiberationSans-Bold.ttf",
+        ]
 
     for path in candidates:
         if os.path.exists(path):
@@ -125,88 +139,115 @@ def get_font(size, italic=False):
     return ImageFont.load_default()
 
 
-# ==================================================
-# BUSCAR FOTOGRAFÍAS REALES CON LICENCIA
-# ==================================================
+# =========================================================
+# BÚSQUEDA DE FOTOGRAFÍAS
+# =========================================================
 
 def search_photo(query):
     api = "https://commons.wikimedia.org/w/api.php"
 
-    params = {
-        "action": "query",
-        "format": "json",
-        "generator": "search",
-        "gsrsearch": f"filetype:bitmap {query}",
-        "gsrnamespace": 6,
-        "gsrlimit": 20,
-        "prop": "imageinfo",
-        "iiprop": "url|mime|extmetadata|size",
-    }
+    queries = [
+        query,
+        query.replace("funny ", ""),
+        "dog photograph" if "dog" in query else "cat photograph",
+        "person photograph" if "person" in query else "animal photograph",
+        "funny animal photograph",
+    ]
 
-    headers = {
-        "User-Agent": "NelsonLuchaReels/1.0 (video generator)"
-    }
+    for search_term in queries:
+        params = {
+            "action": "query",
+            "format": "json",
+            "generator": "search",
+            "gsrsearch": search_term,
+            "gsrnamespace": 6,
+            "gsrlimit": 30,
+            "prop": "imageinfo",
+            "iiprop": "url|mime|extmetadata|size",
+        }
 
-    try:
-        response = requests.get(
-            api,
-            params=params,
-            headers=headers,
-            timeout=25
-        )
-        response.raise_for_status()
-        pages = response.json().get("query", {}).get("pages", {})
-
-        candidates = list(pages.values())
-        random.shuffle(candidates)
-
-        for page in candidates:
-            info_list = page.get("imageinfo", [])
-            if not info_list:
-                continue
-
-            info = info_list[0]
-            mime = info.get("mime", "")
-
-            if mime not in ("image/jpeg", "image/png", "image/webp"):
-                continue
-
-            if info.get("width", 0) < 500:
-                continue
-
-            metadata = info.get("extmetadata", {})
-            license_name = metadata.get("LicenseShortName", {}).get(
-                "value", ""
+        try:
+            response = requests.get(
+                api,
+                params=params,
+                headers=HEADERS,
+                timeout=25
             )
-            license_lower = license_name.lower()
+            response.raise_for_status()
 
-            allowed = (
-                "cc0" in license_lower
-                or "public domain" in license_lower
-                or "cc by" in license_lower
+            pages = response.json().get(
+                "query", {}
+            ).get("pages", {})
+
+            candidates = list(pages.values())
+            random.shuffle(candidates)
+
+            for page in candidates:
+                image_info_list = page.get("imageinfo", [])
+
+                if not image_info_list:
+                    continue
+
+                info = image_info_list[0]
+                mime = info.get("mime", "")
+
+                if mime not in (
+                    "image/jpeg",
+                    "image/png",
+                    "image/webp"
+                ):
+                    continue
+
+                if info.get("width", 0) < 400:
+                    continue
+
+                metadata = info.get("extmetadata", {})
+                license_name = metadata.get(
+                    "LicenseShortName", {}
+                ).get("value", "")
+
+                license_lower = license_name.lower()
+
+                allowed = (
+                    "cc0" in license_lower
+                    or "public domain" in license_lower
+                    or "cc by" in license_lower
+                )
+
+                if not allowed:
+                    continue
+
+                result = {
+                    "url": info["url"],
+                    "title": page.get("title", "Fotografía"),
+                    "license": license_name,
+                    "artist": metadata.get(
+                        "Artist", {}
+                    ).get("value", "Autor no indicado"),
+                    "license_url": metadata.get(
+                        "LicenseUrl", {}
+                    ).get("value", ""),
+                    "page_url": info.get("descriptionurl", ""),
+                }
+
+                print(
+                    f"Fotografía encontrada: {result['title']}"
+                )
+
+                return result
+
+        except Exception as error:
+            print(
+                f"Error buscando '{search_term}': {error}"
             )
 
-            if not allowed:
-                continue
-
-            return {
-                "url": info["url"],
-                "title": page.get("title", "Fotografía"),
-                "license": license_name,
-                "artist": metadata.get("Artist", {}).get(
-                    "value", "Autor no indicado"
-                ),
-                "license_url": metadata.get("LicenseUrl", {}).get(
-                    "value", ""
-                ),
-                "page_url": info.get("descriptionurl", ""),
-            }
-
-    except Exception as error:
-        print(f"No se pudo buscar la fotografía: {error}")
-
+    print(f"No se encontró fotografía para: {query}")
     return None
 
+
+# =========================================================
+# DESCARGA Y VALIDACIÓN DE FOTOGRAFÍAS
+# =========================================================
 
 def download_photo(photo, index):
     if not photo:
@@ -215,8 +256,8 @@ def download_photo(photo, index):
     try:
         response = requests.get(
             photo["url"],
-            headers={"User-Agent": "NelsonLuchaReels/1.0"},
-            timeout=30
+            headers=HEADERS,
+            timeout=35
         )
         response.raise_for_status()
 
@@ -225,31 +266,32 @@ def download_photo(photo, index):
         image = image.convert("RGB")
 
         path = PHOTOS / f"foto_{index}.jpg"
-        image.save(path, quality=92)
+        image.save(path, quality=94)
 
+        print(f"Fotografía descargada: {path}")
         return path
 
     except Exception as error:
-        print(f"No se pudo descargar la fotografía: {error}")
+        print(f"Error descargando fotografía {index}: {error}")
         return None
 
 
-# ==================================================
-# FONDO REALISTA Y MOVIMIENTO SUAVE
-# ==================================================
-
-def prepare_photo(path):
+def get_background(path):
     if path and path.exists():
         try:
             image = Image.open(path).convert("RGB")
-            image = ImageOpsFit(image, WIDTH, HEIGHT)
-            return image
-        except Exception:
-            pass
+            return ImageOps.fit(
+                image,
+                (WIDTH, HEIGHT),
+                method=Image.Resampling.LANCZOS,
+                centering=(0.5, 0.42)
+            )
+        except Exception as error:
+            print(f"Error preparando fotografía: {error}")
 
-    # Fondo fotográfico neutro si no se consigue una imagen.
-    # Se evita presentar un dibujo como si fuera una fotografía.
-    image = Image.new("RGB", (WIDTH, HEIGHT), (38, 42, 53))
+    # Si no se consigue una foto, usar un fondo neutro.
+    # No se presenta una ilustración como si fuera fotografía.
+    image = Image.new("RGB", (WIDTH, HEIGHT), (45, 48, 58))
     draw = ImageDraw.Draw(image)
     draw.text(
         (WIDTH // 2, HEIGHT // 2),
@@ -261,22 +303,14 @@ def prepare_photo(path):
     return image
 
 
-def ImageOpsFit(image, width, height):
-    from PIL import ImageOps
-    return ImageOps.fit(
-        image,
-        (width, height),
-        method=Image.Resampling.LANCZOS,
-        centering=(0.5, 0.45)
-    )
-
+# =========================================================
+# MOVIMIENTO Y ASPECTO CINEMATOGRÁFICO
+# =========================================================
 
 def cinematic_frame(photo, progress):
-    # Efecto de acercamiento progresivo para que la escena
-    # tenga movimiento, aunque la fuente sea una fotografía.
-    zoom = 1.0 + (0.045 * progress)
-    crop_w = int(WIDTH / zoom)
-    crop_h = int(HEIGHT / zoom)
+    zoom = 1.0 + (0.055 * progress)
+    crop_w = max(1, int(WIDTH / zoom))
+    crop_h = max(1, int(HEIGHT / zoom))
 
     left = (WIDTH - crop_w) // 2
     top = (HEIGHT - crop_h) // 2
@@ -287,43 +321,45 @@ def cinematic_frame(photo, progress):
         left + crop_w,
         top + crop_h
     ))
+
     frame = frame.resize(
         (WIDTH, HEIGHT),
         Image.Resampling.LANCZOS
     )
 
-    # Contraste moderado y oscurecimiento para leer el texto.
     frame = ImageEnhance.Contrast(frame).enhance(1.08)
-    shade = Image.new("RGBA", (WIDTH, HEIGHT), (0, 0, 0, 55))
-    frame = Image.alpha_composite(frame.convert("RGBA"), shade)
+    frame = ImageEnhance.Color(frame).enhance(1.05)
 
-    # Degradado oscuro en la zona inferior.
-    overlay = Image.new("RGBA", (WIDTH, HEIGHT), (0, 0, 0, 0))
-    draw = ImageDraw.Draw(overlay)
-
-    for y in range(HEIGHT // 2, HEIGHT):
-        alpha = int(150 * ((y - HEIGHT // 2) / (HEIGHT // 2)))
-        draw.line((0, y, WIDTH, y), fill=(0, 0, 0, alpha))
-
-    return Image.alpha_composite(frame, overlay)
-
-
-# ==================================================
-# TEXTO Y MARCA DE AGUA
-# ==================================================
-
-def draw_centered(draw, text, y, font, fill, stroke_width=2):
-    draw.text(
-        (WIDTH // 2, y),
-        text,
-        font=font,
-        fill=fill,
-        anchor="mm",
-        align="center",
-        stroke_width=stroke_width,
-        stroke_fill=(0, 0, 0, 230)
+    shade = Image.new(
+        "RGBA",
+        (WIDTH, HEIGHT),
+        (0, 0, 0, 55)
     )
 
+    frame = Image.alpha_composite(
+        frame.convert("RGBA"),
+        shade
+    )
+
+    # Oscurecimiento gradual inferior para mejorar la lectura.
+    gradient = Image.new("RGBA", (WIDTH, HEIGHT), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(gradient)
+
+    for y in range(HEIGHT // 2, HEIGHT):
+        alpha = int(
+            150 * ((y - HEIGHT // 2) / (HEIGHT // 2))
+        )
+        draw.line(
+            (0, y, WIDTH, y),
+            fill=(0, 0, 0, alpha)
+        )
+
+    return Image.alpha_composite(frame, gradient)
+
+
+# =========================================================
+# TEXTO
+# =========================================================
 
 def wrap_text(draw, text, font, max_width):
     words = text.split()
@@ -331,9 +367,15 @@ def wrap_text(draw, text, font, max_width):
     current = ""
 
     for word in words:
-        test = f"{current} {word}".strip()
-        if draw.textbbox((0, 0), test, font=font)[2] <= max_width:
-            current = test
+        candidate = f"{current} {word}".strip()
+        width = draw.textbbox(
+            (0, 0),
+            candidate,
+            font=font
+        )[2]
+
+        if width <= max_width:
+            current = candidate
         else:
             if current:
                 lines.append(current)
@@ -345,24 +387,42 @@ def wrap_text(draw, text, font, max_width):
     return lines
 
 
-def draw_panel(draw, y, text, font, fill, max_width=620):
-    lines = wrap_text(draw, text, font, max_width)
-    line_height = 57
-    height = len(lines) * line_height + 34
+def draw_centered(draw, text, y, font, fill):
+    draw.text(
+        (WIDTH // 2, y),
+        text,
+        font=font,
+        fill=fill,
+        anchor="mm",
+        align="center",
+        stroke_width=2,
+        stroke_fill=(0, 0, 0, 230)
+    )
+
+
+def draw_panel(draw, y, text, font, fill):
+    lines = wrap_text(draw, text, font, WIDTH - 110)
+    line_height = 55
+    panel_height = len(lines) * line_height + 38
 
     draw.rounded_rectangle(
-        (35, y - height // 2, WIDTH - 35, y + height // 2),
+        (
+            35,
+            y - panel_height // 2,
+            WIDTH - 35,
+            y + panel_height // 2
+        ),
         radius=24,
-        fill=(0, 0, 0, 170),
-        outline=(255, 255, 255, 80),
+        fill=(0, 0, 0, 180),
+        outline=(255, 255, 255, 75),
         width=2
     )
 
-    start_y = y - ((len(lines) - 1) * line_height) // 2
+    first_y = y - ((len(lines) - 1) * line_height) // 2
 
-    for index, line in enumerate(lines):
+    for i, line in enumerate(lines):
         draw.text(
-            (WIDTH // 2, start_y + index * line_height),
+            (WIDTH // 2, first_y + i * line_height),
             line,
             font=font,
             fill=fill,
@@ -372,30 +432,73 @@ def draw_panel(draw, y, text, font, fill, max_width=620):
         )
 
 
-def render_frame(photo, joke, scene_index, progress, local_time):
-    frame = cinematic_frame(photo, progress)
-    draw = ImageDraw.Draw(frame, "RGBA")
+# =========================================================
+# MARCA DE AGUA Y FIRMA
+# =========================================================
 
-    # Encabezado.
+def add_branding(draw, progress, local_time):
     draw.rounded_rectangle(
-        (35, 45, WIDTH - 35, 125),
-        radius=24,
+        (45, 45, WIDTH - 45, 125),
+        radius=22,
         fill=(0, 0, 0, 165)
     )
 
     draw_centered(
         draw,
-        joke["title"],
+        BRAND,
         85,
-        get_font(31),
-        (255, 220, 75, 255)
+        get_font(23),
+        (255, 255, 255, 255)
     )
 
-    # Texto inicial y remate, con espacio entre ambos.
-    if local_time < SCENE_SECONDS * 0.57:
+    # Marca de agua permanente en la parte inferior.
+    draw.rounded_rectangle(
+        (50, 1190, WIDTH - 50, 1245),
+        radius=20,
+        fill=(0, 0, 0, 185)
+    )
+
+    draw_centered(
+        draw,
+        "Nelson Lucha Reels Graciosos",
+        1217,
+        get_font(17),
+        (255, 255, 255, 255)
+    )
+
+    # Firma elegante al final de cada escena.
+    if local_time >= SCENE_SECONDS - 1.3:
+        draw.rounded_rectangle(
+            (155, 985, WIDTH - 155, 1060),
+            radius=24,
+            fill=(0, 0, 0, 185)
+        )
+
+        draw.text(
+            (WIDTH // 2, 1022),
+            SIGNATURE,
+            font=get_font(32, italic=True),
+            fill=(255, 230, 165, 255),
+            anchor="mm",
+            stroke_width=1,
+            stroke_fill=(0, 0, 0, 200)
+        )
+
+
+# =========================================================
+# CONSTRUIR CADA CUADRO
+# =========================================================
+
+def render_frame(photo, joke, progress, local_time):
+    frame = cinematic_frame(photo, progress)
+    draw = ImageDraw.Draw(frame, "RGBA")
+
+    add_branding(draw, progress, local_time)
+
+    if local_time < SCENE_SECONDS * 0.58:
         draw_panel(
             draw,
-            740,
+            735,
             joke["text"],
             get_font(39),
             (255, 255, 255, 255)
@@ -403,19 +506,19 @@ def render_frame(photo, joke, scene_index, progress, local_time):
     else:
         draw_panel(
             draw,
-            740,
+            735,
             joke["punch"],
-            get_font(36),
-            (255, 225, 85, 255)
+            get_font(35),
+            (255, 225, 75, 255)
         )
 
-    # Barra de progreso de cada escena.
+    # Barra de progreso.
     bar_x = 50
-    bar_y = 1165
+    bar_y = 1155
     bar_width = WIDTH - 100
 
     draw.rounded_rectangle(
-        (bar_x, bar_y, bar_x + bar_width, bar_y + 8),
+        (bar_x, bar_y, bar_x + bar_width, bar_y + 7),
         radius=4,
         fill=(255, 255, 255, 90)
     )
@@ -425,178 +528,156 @@ def render_frame(photo, joke, scene_index, progress, local_time):
             bar_x,
             bar_y,
             bar_x + int(bar_width * progress),
-            bar_y + 8
+            bar_y + 7
         ),
         radius=4,
         fill=(255, 220, 65, 255)
     )
 
-    # Marca de agua permanente.
-    draw.rounded_rectangle(
-        (65, 1190, WIDTH - 65, 1245),
-        radius=20,
-        fill=(0, 0, 0, 185),
-        outline=(255, 255, 255, 60),
-        width=1
-    )
-
-    draw_centered(
-        draw,
-        BRAND,
-        1217,
-        get_font(19),
-        (255, 255, 255, 255),
-        stroke_width=1
-    )
-
-    # Firma elegante al final de cada escena.
-    if local_time >= SCENE_SECONDS - 1.3:
-        alpha = int(
-            255 * min(1, (local_time - (SCENE_SECONDS - 1.3)) / 0.5)
-        )
-        draw.rounded_rectangle(
-            (145, 985, WIDTH - 145, 1060),
-            radius=25,
-            fill=(0, 0, 0, 175)
-        )
-        draw.text(
-            (WIDTH // 2, 1022),
-            SIGNATURE,
-            font=get_font(31, italic=True),
-            fill=(255, 235, 170, alpha),
-            anchor="mm",
-            stroke_width=1,
-            stroke_fill=(0, 0, 0, 200)
-        )
-
     return frame.convert("RGB")
 
 
-# ==================================================
-# NARRACIÓN
-# ==================================================
+# =========================================================
+# NARRACIÓN EN ESPAÑOL
+# =========================================================
 
 async def create_voice(jokes):
-    narration = " ".join(joke["voice"] for joke in jokes)
+    narration = " ... ".join(joke["voice"] for joke in jokes)
 
-    # Voz algo rápida para que entren los chistes sin
-    # perder claridad.
     communicate = edge_tts.Communicate(
         narration,
         VOICE,
-        rate="+12%",
+        rate="+10%",
         volume="+0%"
     )
+
     await communicate.save(str(AUDIO))
 
 
-# ==================================================
-# CRÉDITOS DE FOTOGRAFÍAS
-# ==================================================
+# =========================================================
+# CRÉDITOS DE LAS FOTOGRAFÍAS
+# =========================================================
 
 def save_credits(photos):
     path = OUT / "creditos_imagenes.txt"
 
     with open(path, "w", encoding="utf-8") as file:
-        file.write("CRÉDITOS DE LAS FOTOGRAFÍAS\n")
-        file.write("===========================\n\n")
+        file.write("CRÉDITOS DE FOTOGRAFÍAS\n")
+        file.write("=======================\n\n")
 
         for index, photo in enumerate(photos, start=1):
+            file.write(f"ESCENA {index}\n")
+
             if not photo:
-                file.write(f"Escena {index}: no se obtuvo fotografía.\n\n")
+                file.write("No se encontró fotografía.\n\n")
                 continue
 
-            file.write(f"Escena {index}\n")
             file.write(f"Archivo: {photo['title']}\n")
             file.write(f"Autor: {photo['artist']}\n")
             file.write(f"Licencia: {photo['license']}\n")
-            file.write(f"Licencia URL: {photo['license_url']}\n")
+            file.write(f"Licencia: {photo['license_url']}\n")
             file.write(f"Página: {photo['page_url']}\n\n")
 
 
-# ==================================================
-# GENERACIÓN DEL VIDEO
-# ==================================================
+# =========================================================
+# GENERAR REEL
+# =========================================================
 
 def main():
-    print("Preparando un Reel de 30 segundos...")
+    print("Iniciando generador de Reels...")
+    print(f"Duración prevista: {DURATION} segundos")
 
     selected = random.sample(JOKES, SCENES)
-    photos = []
+    photo_info_list = []
     backgrounds = []
 
     for index, joke in enumerate(selected, start=1):
-        print(f"Buscando fotografía para escena {index}...")
+        print(f"\nBuscando foto para escena {index}...")
+
         photo_info = search_photo(joke["query"])
-        photos.append(photo_info)
+        photo_info_list.append(photo_info)
 
         photo_path = download_photo(photo_info, index)
-        backgrounds.append(prepare_photo(photo_path))
+        background = get_background(photo_path)
 
-    save_credits(photos)
+        backgrounds.append(background)
 
-    print("Generando narración en español...")
+    save_credits(photo_info_list)
+
+    print("\nGenerando narración...")
     asyncio.run(create_voice(selected))
 
-    total_frames = DURATION * FPS
+    # Eliminar cuadros antiguos para evitar mezclar ejecuciones.
+    for old_frame in FRAMES.glob("frame_*.jpg"):
+        old_frame.unlink()
+
+    frames_per_scene = int(SCENE_SECONDS * FPS)
     frame_number = 0
 
-    print("Creando escenas con movimiento...")
+    print("Creando las escenas...")
 
     for scene_index, joke in enumerate(selected):
         background = backgrounds[scene_index]
 
-        for frame_in_scene in range(int(SCENE_SECONDS * FPS)):
-            progress = frame_in_scene / max(
-                1, int(SCENE_SECONDS * FPS) - 1
-            )
-            local_time = frame_in_scene / FPS
+        for frame_index in range(frames_per_scene):
+            progress = frame_index / max(1, frames_per_scene - 1)
+            local_time = frame_index / FPS
 
             frame = render_frame(
                 background,
                 joke,
-                scene_index,
                 progress,
                 local_time
             )
 
             frame_path = FRAMES / f"frame_{frame_number:05d}.jpg"
-            frame.save(frame_path, quality=90)
+            frame.save(frame_path, quality=91)
             frame_number += 1
 
-    # Asegurar exactamente la cantidad de cuadros prevista.
     ffmpeg = imageio_ffmpeg.get_ffmpeg_exe()
-    output_pattern = str(FRAMES / "frame_%05d.jpg")
+    input_pattern = str(FRAMES / "frame_%05d.jpg")
 
     command = [
         ffmpeg,
         "-y",
         "-framerate", str(FPS),
-        "-i", output_pattern,
+        "-i", input_pattern,
         "-i", str(AUDIO),
+        "-map", "0:v:0",
+        "-map", "1:a:0",
         "-vf", "format=yuv420p",
         "-c:v", "libx264",
         "-preset", "ultrafast",
-        "-crf", "24",
+        "-crf", "23",
         "-c:a", "aac",
         "-b:a", "128k",
         "-af", f"apad,atrim=0:{DURATION}",
         "-t", str(DURATION),
-        "-shortest",
         "-movflags", "+faststart",
         str(VIDEO)
     ]
 
-    print("Montando video y audio...")
+    print("\nMontando el video...")
     subprocess.run(command, check=True)
 
-    # Limpiar los cuadros temporales para ahorrar espacio.
-    for file in FRAMES.glob("frame_*.jpg"):
-        file.unlink()
+    # Limpiar únicamente los cuadros temporales.
+    for frame in FRAMES.glob("frame_*.jpg"):
+        frame.unlink()
 
-    print(f"¡Reel terminado! Archivo: {VIDEO}")
-    print(f"Duración configurada: {DURATION} segundos")
-    print("Créditos de las fotos: salida/creditos_imagenes.txt")
+    print("\n¡Reel terminado!")
+    print(f"Video: {VIDEO}")
+    print(f"Duración prevista: {DURATION} segundos")
+    print(f"Créditos: {OUT / 'creditos_imagenes.txt'}")
+
+    missing = sum(1 for photo in photo_info_list if photo is None)
+
+    if missing:
+        print(
+            f"AVISO: {missing} escena(s) no consiguieron foto. "
+            "Revisa los mensajes de búsqueda anteriores."
+        )
+    else:
+        print("Las cuatro escenas encontraron fotografías.")
 
 
 if __name__ == "__main__":
