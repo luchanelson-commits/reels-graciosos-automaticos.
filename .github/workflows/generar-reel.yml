@@ -1,4 +1,4 @@
-name: Generar Reel gracioso
+name: Generar y subir Reel corto
 
 on:
   schedule:
@@ -7,6 +7,10 @@ on:
 
 permissions:
   contents: read
+
+concurrency:
+  group: generar-reel-publicacion
+  cancel-in-progress: false
 
 jobs:
   generar-reel:
@@ -20,7 +24,8 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-          cache: "pip"
+          cache: pip
+          cache-dependency-path: requirements.txt
 
       - name: Instalar FFmpeg y FFprobe
         run: |
@@ -29,18 +34,29 @@ jobs:
           ffmpeg -version
           ffprobe -version
 
-      - name: Instalar dependencias de Python
+      - name: Instalar dependencias
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Generar Reel
-        run: python generar_reel.py
+      - name: Verificar código
+        run: |
+          python -m py_compile generar_reel.py
+          python -m py_compile generar_reel_publicacion.py
 
-      - name: Guardar Reel generado
+      - name: Generar Reel corto y subir a Cloudinary
+        env:
+          CLOUDINARY_CLOUD_NAME: ${{ secrets.CLOUDINARY_CLOUD_NAME }}
+          CLOUDINARY_API_KEY: ${{ secrets.CLOUDINARY_API_KEY }}
+          CLOUDINARY_API_SECRET: ${{ secrets.CLOUDINARY_API_SECRET }}
+        run: python generar_reel_publicacion.py
+
+      - name: Guardar video y URL como artefactos
         uses: actions/upload-artifact@v4
         with:
-          name: reel-gracioso
-          path: "*.mp4"
+          name: reel-gracioso-publicacion
+          path: |
+            reel_gracioso_publicacion.mp4
+            video_url.txt
           if-no-files-found: error
           retention-days: 7
