@@ -1,6 +1,7 @@
 import asyncio
 import math
 import random
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -8,224 +9,245 @@ from PIL import Image, ImageDraw, ImageFont
 import edge_tts
 import imageio_ffmpeg
 
+# CONFIGURACIÓN
+WIDTH, HEIGHT = 720, 1280
+FPS = 12
+SCENE_SECONDS = 5
+VOICE = "es-MX-DaliaNeural"
 
-# ---------------- CONFIGURACIÓN ----------------
+OUT = Path("salida")
+FRAMES = OUT / "frames"
+VIDEO = OUT / "reel_gracioso.mp4"
+AUDIO = OUT / "narracion.mp3"
 
-ANCHO = 720
-ALTO = 1280
-FPS = 15
-SEGUNDOS_ESCENA = 5
-TOTAL_ESCENAS = 5
-
-SALIDA = Path("salida")
-FRAMES = SALIDA / "frames"
-SALIDA.mkdir(exist_ok=True)
-FRAMES.mkdir(exist_ok=True)
-
-VIDEO = SALIDA / "reel_gracioso.mp4"
-AUDIO = SALIDA / "narracion.mp3"
-
-VOZ = "es-MX-DaliaNeural"
-
-ESCENAS = [
+SCENES = [
     {
-        "titulo": "YO, COBRANDO EL SUELDO",
-        "texto": "ESTA VEZ SÍ VOY A AHORRAR",
-        "remate": "A LOS 10 MINUTOS: ¿Y MI DINERO?",
-        "voz": "Yo cuando cobro: esta vez sí voy a ahorrar. Diez minutos después... ¿y mi dinero?"
+        "title": "CUANDO COBRO",
+        "text": "ESTA VEZ SÍ VOY A AHORRAR",
+        "punch": "¿QUIÉN SE LLEVÓ MI DINERO?",
+        "voice": "Cuando cobro digo: esta vez sí voy a ahorrar. Diez minutos después: ¿quién se llevó mi dinero?"
     },
     {
-        "titulo": "EL LUNES EMPIEZO",
-        "texto": "DIETA, EJERCICIO Y DISCIPLINA",
-        "remate": "PERO HOY HAY PUPUSAS",
-        "voz": "El lunes empiezo la dieta, el ejercicio y la disciplina. Pero hoy hay pupusas... y uno tiene prioridades."
+        "title": "EL LUNES EMPIEZO",
+        "text": "DIETA, EJERCICIO Y DISCIPLINA",
+        "punch": "PERO HOY HAY PUPUSAS",
+        "voice": "El lunes empiezo la dieta, el ejercicio y la disciplina. Pero hoy hay pupusas, y uno tiene prioridades."
     },
     {
-        "titulo": "YO DICIENDO: YA ME DUERMO",
-        "texto": "SOLO VOY A VER UN VIDEO",
-        "remate": "SON LAS 3 DE LA MAÑANA",
-        "voz": "Yo diciendo que ya me voy a dormir. Solo un video más... y de repente son las tres de la mañana."
+        "title": "SOLO UN VIDEO MÁS",
+        "text": "YA ME VOY A DORMIR",
+        "punch": "¡SON LAS TRES DE LA MAÑANA!",
+        "voice": "Yo diciendo que ya me voy a dormir. Solo un video más. De repente, ¡son las tres de la mañana!"
     },
     {
-        "titulo": "CUANDO ME ESCRIBE MI EX",
-        "texto": "YA LO SUPERÉ",
-        "remate": "¿Y SI SOLO LE CONTESTO HOLA?",
-        "voz": "Cuando me escribe mi ex, digo que ya lo superé. Pero mi dedo pregunta... ¿y si solo le contesto hola?"
+        "title": "CUANDO ME ESCRIBE MI EX",
+        "text": "YA LO SUPERÉ",
+        "punch": "¿Y SI LE DIGO HOLA?",
+        "voice": "Cuando me escribe mi ex, digo que ya lo superé. Pero mi dedo pregunta: ¿y si le digo hola?"
     },
     {
-        "titulo": "YO HACIENDO PLANES",
-        "texto": "MAÑANA SERÉ PRODUCTIVO",
-        "remate": "MAÑANA TAMBIÉN ES DÍA",
-        "voz": "Yo haciendo planes para mañana: seré productivo, ordenado y puntual. Bueno... mañana también es día."
+        "title": "HACIENDO PLANES",
+        "text": "MAÑANA SERÉ PRODUCTIVO",
+        "punch": "MEJOR EMPIEZO EL LUNES",
+        "voice": "Mañana seré productivo, ordenado y puntual. Bueno, mejor empiezo el lunes. ¡Este lunes sí!"
+    },
+    {
+        "title": "CUANDO DICEN: TRANQUILO",
+        "text": "YO ESTOY MUY TRANQUILO",
+        "punch": "PERO POR DENTRO: ¡AAAAH!",
+        "voice": "Cuando me dicen tranquilo, yo respondo que estoy tranquilo. Pero por dentro estoy gritando como loco."
+    },
+    {
+        "title": "MI CUENTA BANCARIA",
+        "text": "YO: SOY MILLONARIO",
+        "punch": "MI SALDO: JA, JA, JA",
+        "voice": "Yo me siento millonario hasta que reviso mi cuenta bancaria. Mi saldo se ríe de mí."
+    },
+    {
+        "title": "CUANDO LIMPIO LA CASA",
+        "text": "HOY SÍ TERMINO TODO",
+        "punch": "ENCUENTRO EL CELULAR Y ADIÓS",
+        "voice": "Hoy sí voy a limpiar toda la casa. Encuentro mi celular, reviso un mensaje y se acabó la jornada."
     },
 ]
 
 
-def fuente(tamano, negrita=True):
-    rutas = [
-        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
-        if negrita else
-        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-        "/usr/share/fonts/truetype/liberation2/LiberationSans-Bold.ttf"
+def get_font(size):
+    paths = [
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+        "/usr/share/fonts/truetype/liberation2/LiberationSans-Bold.ttf",
     ]
-    for ruta in rutas:
-        if Path(ruta).exists():
-            return ImageFont.truetype(ruta, tamano)
+    for path in paths:
+        if Path(path).exists():
+            return ImageFont.truetype(path, size)
     return ImageFont.load_default()
 
 
-def texto_centrado(draw, texto, y, font, fill, ancho_max=660):
-    palabras = texto.split()
-    lineas = []
-    actual = ""
+def draw_centered(draw, text, y, font, color, max_width=630):
+    words = text.split()
+    lines = []
+    current = ""
 
-    for palabra in palabras:
-        prueba = f"{actual} {palabra}".strip()
-        if draw.textbbox((0, 0), prueba, font=font)[2] <= ancho_max:
-            actual = prueba
+    for word in words:
+        test = (current + " " + word).strip()
+        if draw.textbbox((0, 0), test, font=font)[2] <= max_width:
+            current = test
         else:
-            if actual:
-                lineas.append(actual)
-            actual = palabra
+            if current:
+                lines.append(current)
+            current = word
 
-    if actual:
-        lineas.append(actual)
+    if current:
+        lines.append(current)
 
-    alto_linea = font.size + 12
-    for linea in lineas:
-        caja = draw.textbbox((0, 0), linea, font=font, stroke_width=2)
-        x = (ANCHO - (caja[2] - caja[0])) // 2
+    for line in lines:
+        box = draw.textbbox((0, 0), line, font=font, stroke_width=2)
+        x = (WIDTH - (box[2] - box[0])) // 2
         draw.text(
-            (x, y), linea, font=font, fill=fill,
-            stroke_width=2, stroke_fill="#202033"
+            (x, y), line, font=font, fill=color,
+            stroke_width=2, stroke_fill="#171717"
         )
-        y += alto_linea
+        y += font.size + 12
 
     return y
 
 
-def dibujar_personaje(draw, cx, cy, tipo, movimiento):
-    # Personaje cómico original dibujado con formas.
-    radio = 92
-    colores = ["#FFD166", "#FFADAD", "#BDB2FF", "#9BF6FF", "#CAFFBF"]
-    piel = colores[tipo % len(colores)]
+def draw_character(draw, cx, cy, index, motion):
+    skin_colors = ["#FFD166", "#F4B183", "#FFADAD", "#C9A0FF"]
+    shirt_colors = ["#EF476F", "#118AB2", "#06D6A0", "#F59E0B"]
 
-    # Cuerpo
+    skin = skin_colors[index % len(skin_colors)]
+    shirt = shirt_colors[index % len(shirt_colors)]
+
+    # Brazos y cuerpo
+    draw.line(
+        (cx - 45, cy + 105, cx - 115, cy + 145 + motion),
+        fill=skin, width=25
+    )
+    draw.line(
+        (cx + 45, cy + 105, cx + 115, cy + 145 - motion),
+        fill=skin, width=25
+    )
     draw.rounded_rectangle(
-        (cx - 70, cy + 70, cx + 70, cy + 235),
-        radius=35, fill=["#EF476F", "#118AB2", "#06D6A0"][tipo % 3]
+        (cx - 65, cy + 65, cx + 65, cy + 235),
+        radius=30, fill=shirt
     )
 
-    # Brazos
-    draw.line((cx - 50, cy + 100, cx - 115, cy + 155 + movimiento),
-              fill=piel, width=28)
-    draw.line((cx + 50, cy + 100, cx + 115, cy + 140 - movimiento),
-              fill=piel, width=28)
-
     # Cabeza
-    draw.ellipse((cx-radio, cy-radio, cx+radio, cy+radio), fill=piel,
-                 outline="#202033", width=5)
+    r = 82
+    draw.ellipse(
+        (cx-r, cy-r, cx+r, cy+r),
+        fill=skin, outline="#202033", width=5
+    )
 
     # Ojos
-    draw.ellipse((cx-42, cy-25, cx-15, cy+10), fill="#202033")
-    draw.ellipse((cx+15, cy-25, cx+42, cy+10), fill="#202033")
+    draw.ellipse((cx-40, cy-25, cx-15, cy+8), fill="#202033")
+    draw.ellipse((cx+15, cy-25, cx+40, cy+8), fill="#202033")
 
-    # Boca exagerada
-    if tipo % 2 == 0:
-        draw.ellipse((cx-35, cy+22, cx+35, cy+65), fill="#7A284B")
+    # Boca cómica
+    if index % 2 == 0:
+        draw.ellipse((cx-28, cy+22, cx+28, cy+62), fill="#7A284B")
     else:
-        draw.arc((cx-42, cy+10, cx+42, cy+62),
-                 start=10, end=170, fill="#202033", width=7)
+        draw.arc(
+            (cx-38, cy+15, cx+38, cy+60),
+            start=5, end=175, fill="#202033", width=6
+        )
 
 
-def crear_imagen_escena(escena, indice, movimiento):
-    fondo = ["#172554", "#3B0764", "#064E3B", "#7C2D12", "#164E63"][indice]
-    img = Image.new("RGB", (ANCHO, ALTO), fondo)
+def make_scene(scene, index, frame_number):
+    backgrounds = [
+        "#172554", "#3B0764", "#064E3B", "#7C2D12",
+        "#164E63", "#831843", "#312E81", "#14532D"
+    ]
+    img = Image.new("RGB", (WIDTH, HEIGHT), backgrounds[index % len(backgrounds)])
     draw = ImageDraw.Draw(img)
 
-    # Confeti y círculos decorativos
-    random.seed(indice + 20)
-    for _ in range(28):
-        x = random.randint(0, ANCHO)
-        y = random.randint(0, ALTO)
-        r = random.randint(8, 25)
+    # Decoración aleatoria pero estable por escena
+    random.seed(index + 123)
+    for _ in range(24):
+        x = random.randint(0, WIDTH)
+        y = random.randint(0, HEIGHT)
+        r = random.randint(7, 18)
         color = random.choice(
             ["#FFD166", "#FF70A6", "#70D6FF", "#E9FF70"]
         )
         draw.ellipse((x-r, y-r, x+r, y+r), fill=color)
 
-    # Panel superior
+    # Título
     draw.rounded_rectangle(
-        (25, 35, ANCHO-25, 225), radius=32, fill="#FFF8E7"
+        (25, 35, WIDTH-25, 210), radius=28, fill="#FFF8E7"
     )
-    texto_centrado(
-        draw, escena["titulo"], 65, fuente(36),
-        "#202033", ancho_max=620
+    draw_centered(
+        draw, scene["title"], 80, get_font(34), "#202033"
     )
 
-    # Ilustración central
-    dibujar_personaje(draw, ANCHO // 2, 440, indice, movimiento)
+    # Personaje con pequeño movimiento
+    seconds = frame_number / FPS
+    motion = int(12 * math.sin(seconds * 5))
+    draw_character(draw, WIDTH // 2, 440, index, motion)
 
-    # Panel de texto
+    # Texto principal
     draw.rounded_rectangle(
-        (28, 770, ANCHO-28, 1110), radius=35, fill="#FFF8E7"
+        (25, 770, WIDTH-25, 1100), radius=30, fill="#FFF8E7"
     )
-    texto_centrado(
-        draw, escena["texto"], 815, fuente(39),
-        "#C0265C", ancho_max=620
+    draw_centered(
+        draw, scene["text"], 815, get_font(36), "#C0265C"
     )
-    texto_centrado(
-        draw, escena["remate"], 970, fuente(32),
-        "#202033", ancho_max=620
+    draw_centered(
+        draw, scene["punch"], 965, get_font(30), "#202033"
     )
 
     draw.text(
-        (ANCHO // 2, 1180), "😂 ¡COMPÁRTELO CON TUS AMIGOS!",
-        font=fuente(22), fill="white", anchor="mm"
+        (WIDTH // 2, 1180),
+        "😂 COMPARTE Y ETIQUETA A TUS AMIGOS",
+        font=get_font(19), fill="white", anchor="mm"
     )
+
     return img
 
 
-async def generar_narracion():
-    texto = " ".join(escena["voz"] for escena in ESCENAS)
-    comunicador = edge_tts.Communicate(texto, VOZ, rate="+8%")
-    await comunicador.save(str(AUDIO))
-
-
-def ejecutar(comando):
-    resultado = subprocess.run(
-        comando, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
+async def create_voice():
+    narration = " ".join(scene["voice"] for scene in SCENES)
+    speaker = edge_tts.Communicate(
+        narration, VOICE, rate="+8%", volume="+0%"
     )
-    if resultado.returncode != 0:
-        raise RuntimeError(resultado.stderr[-3000:])
+    await speaker.save(str(AUDIO))
+
+
+def run_command(command):
+    result = subprocess.run(
+        command, stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE, text=True
+    )
+    if result.returncode != 0:
+        raise RuntimeError(result.stderr[-4000:])
 
 
 def main():
-    print("Generando narración en español...")
-    try:
-        asyncio.run(generar_narracion())
-    except Exception as error:
-        raise RuntimeError(
-            "No se pudo crear la narración. Revisa la conexión del servicio "
-            "de voz e inténtalo de nuevo."
-        ) from error
+    OUT.mkdir(parents=True, exist_ok=True)
 
-    print("Dibujando las escenas...")
-    total_frames = FPS * SEGUNDOS_ESCENA * TOTAL_ESCENAS
-    numero = 0
+    if FRAMES.exists():
+        shutil.rmtree(FRAMES)
+    FRAMES.mkdir(parents=True)
 
-    for indice, escena in enumerate(ESCENAS):
-        for local in range(FPS * SEGUNDOS_ESCENA):
-            tiempo = local / FPS
-            movimiento = int(10 * math.sin(tiempo * 5))
-            imagen = crear_imagen_escena(escena, indice, movimiento)
-            imagen.save(FRAMES / f"frame_{numero:05d}.png")
-            numero += 1
+    print("Creando narración en español...")
+    asyncio.run(create_voice())
 
-    print("Montando el video vertical...")
+    print("Creando escenas...")
+    frames_per_scene = FPS * SCENE_SECONDS
+    frame_number = 0
+
+    for scene_index, scene in enumerate(SCENES):
+        for _ in range(frames_per_scene):
+            img = make_scene(scene, scene_index, frame_number)
+            img.save(FRAMES / f"frame_{frame_number:05d}.png")
+            frame_number += 1
+
+    print("Generando archivo MP4...")
     ffmpeg = imageio_ffmpeg.get_ffmpeg_exe()
+    duration = len(SCENES) * SCENE_SECONDS
 
-    ejecutar([
+    run_command([
         ffmpeg, "-y",
         "-framerate", str(FPS),
         "-i", str(FRAMES / "frame_%05d.png"),
@@ -234,22 +256,22 @@ def main():
         "-r", str(FPS),
         "-c:v", "libx264",
         "-preset", "ultrafast",
-        "-crf", "27",
+        "-crf", "28",
         "-c:a", "aac",
         "-b:a", "96k",
         "-af", "apad",
-        "-t", str(SEGUNDOS_ESCENA * TOTAL_ESCENAS),
+        "-t", str(duration),
         "-movflags", "+faststart",
-        str(VIDEO)
+        str(VIDEO),
     ])
 
-    # Limpia los cuadros intermedios para reducir el tamaño del artefacto.
-    for archivo in FRAMES.glob("*.png"):
-        archivo.unlink()
-    FRAMES.rmdir()
+    shutil.rmtree(FRAMES, ignore_errors=True)
 
-    print(f"Reel creado correctamente: {VIDEO}")
-    print(f"Duración prevista: {SEGUNDOS_ESCENA * TOTAL_ESCENAS} segundos")
+    if not VIDEO.exists() or VIDEO.stat().st_size == 0:
+        raise RuntimeError("No se encontró el video MP4 generado.")
+
+    print(f"¡REEL CREADO! Archivo: {VIDEO}")
+    print(f"Tamaño: {VIDEO.stat().st_size // 1024} KB")
 
 
 if __name__ == "__main__":
