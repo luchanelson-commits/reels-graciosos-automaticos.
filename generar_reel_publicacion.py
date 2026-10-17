@@ -1,235 +1,436 @@
-import os
-import math
-import time
-import random
 import asyncio
+import os
+import random
 import subprocess
-import hashlib
+import textwrap
 from pathlib import Path
 
 import requests
-import generar_reel as base
+import edge_tts
+from PIL import Image, ImageDraw, ImageFont, ImageEnhance, ImageFilter
 
+
+# ============================================================
+# CONFIGURACIÓN
+# ============================================================
+
+ANCHO = 720
+ALTO = 1280
+FPS = 12
+SEGUNDOS_ESCENA = 7
+TOTAL_ESCENAS = 5
 
 OUTPUT = "reel_gracioso_publicacion.mp4"
-FPS_PUBLICACION = 24
-MAX_DURATION = 59
+VIDEO_URL_FILE = "video_url.txt"
+CARPETA = Path("reel_temporal")
+
+CLOUD_NAME = os.getenv("CLOUDINARY_CLOUD_NAME", "").strip()
+UPLOAD_PRESET = os.getenv(
+    "CLOUDINARY_UPLOAD_PRESET", "reels_automaticos"
+).strip()
+
+FIRMA = "Nelson Lucha"
+MARCA = "Nelson Lucha Reels Graciosos"
+
+FRASES = [
+    "Yo diciendo: hoy sí me duermo temprano... 😂",
+    "Mi cartera cuando llega el fin de mes: ¡auxilio! 🤣",
+    "Yo haciendo ejercicio: levantando el control remoto. 😂",
+    "Cuando dicen que el lunes comienzo la dieta... 🍕",
+    "La vida es corta: ríete antes de que llegue la factura. 🤣",
+    "Yo esperando que llegue el dinero sin salir a trabajar. 😂",
+    "Mi motivación los lunes todavía está dormida. 😴",
+    "Cuando abres la refrigeradora por quinta vez esperando algo nuevo. 😂",
+    "Sonríe, que preocuparse no paga las cuentas. 🤣",
+    "Yo haciendo planes y mi bolsillo haciendo otros. 😂",
+]
+
+# Fotografías públicas de Unsplash para los fondos.
+FOTOS = [
+    "https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=1000",
+    "https://images.unsplash.com/photo-1500648767791-00dcc994a43e?w=1000",
+    "https://images.unsplash.com/photo-1506794778202-cad84cf45f1d?w=1000",
+    "https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=1000",
+    "https://images.unsplash.com/photo-1504593811423-6dd665756598?w=1000",
+]
 
 
-def subir_a_cloudinary(video_path):
-    cloud = os.environ.get("CLOUDINARY_CLOUD_NAME", "").strip()
-    api_key = os.environ.get("CLOUDINARY_API_KEY", "").strip()
-    api_secret = os.environ.get("CLOUDINARY_API_SECRET", "").strip()
+# ============================================================
+# HERRAMIENTAS
+# ============================================================
 
-    if not cloud or not api_key or not api_secret:
-        raise RuntimeError(
-            "Faltan secretos de Cloudinary en GitHub Actions."
-        )
-
-    timestamp = int(time.time())
-    public_id = f"nelson_lucha_reel_{timestamp}"
-
-    params = {
-        "public_id": public_id,
-        "timestamp": str(timestamp),
-    }
-
-    signature_text = "&".join(
-        f"{key}={params[key]}" for key in sorted(params)
-    ) + api_secret
-
-    signature = hashlib.sha1(
-        signature_text.encode("utf-8")
-    ).hexdigest()
-
-    url = f"https://api.cloudinary.com/v1_1/{cloud}/video/upload"
-
-    print("Subiendo video a Cloudinary...")
-
-    with open(video_path, "rb") as video_file:
-        response = requests.post(
-            url,
-            data={
-                **params,
-                "api_key": api_key,
-                "signature": signature,
-            },
-            files={"file": video_file},
-            timeout=300,
-        )
-
-    if not response.ok:
-        raise RuntimeError(
-            f"Cloudinary rechazó la subida: "
-            f"{response.status_code} {response.text[:800]}"
-        )
-
-    result = response.json()
-    video_url = result.get("secure_url")
-
-    if not video_url:
-        raise RuntimeError(
-            "Cloudinary no devolvió la URL pública del video."
-        )
-
-    check = requests.get(
-        video_url,
-        headers={"Range": "bytes=0-1023"},
-        timeout=45,
-        stream=True,
+def ejecutar(comando):
+    resultado = subprocess.run(
+        comando,
+        capture_output=True,
+        text=True
     )
-
-    try:
-        if check.status_code not in (200, 206):
-            raise RuntimeError(
-                f"No se pudo comprobar la URL pública: "
-                f"HTTP {check.status_code}"
-            )
-    finally:
-        check.close()
-
-    Path("video_url.txt").write_text(
-        video_url + "\n", encoding="utf-8"
-    )
-
-    print("Video subido correctamente.")
-    print("URL pública verificada.")
-    print("La URL se guardó en video_url.txt")
-
-
-def crear_video_corto():
-    # Primero probamos con dos chistes para acercarnos a 45-59 s.
-    selected = random.sample(base.JOKES, 2)
-    audio_path = base.WORK / "narracion_publicacion.mp3"
-
-    for intento in range(2):
-        print(f"Preparando narración: intento {intento + 1}")
-
-        words = asyncio.run(
-            base.create_voice(selected, audio_path)
+    if resultado.returncode != 0:
+        raise RuntimeError(
+            "Falló un comando multimedia:\n"
+            + resultado.stderr[-3000:]
         )
 
-        audio_duration = base.get_audio_duration(audio_path)
-        duration = max(base.MIN_DURATION, math.ceil(audio_duration + 1))
 
-        if duration <= MAX_DURATION:
-            break
-
-        if intento == 0:
-            print(
-                "Dos chistes superan los 59 segundos. "
-                "Probando con uno."
-            )
-            selected = random.sample(selected, 1)
-        else:
-            raise RuntimeError(
-                "La narración supera 59 segundos. "
-                "No se publicará un video demasiado largo."
-            )
-
-    if duration > MAX_DURATION:
-        raise RuntimeError("El video supera el límite de duración.")
-
-    groups = base.make_caption_groups(words)
-    photos = []
-
-    print("Descargando fotografías...")
-    for index, joke in enumerate(selected):
-        photos.append(base.search_photo(joke["query"], index))
-
-    frames_dir = base.WORK / "frames_publicacion"
-    frames_dir.mkdir(exist_ok=True)
-
-    for old_frame in frames_dir.glob("frame_*.jpg"):
-        old_frame.unlink()
-
-    total_frames = duration * FPS_PUBLICACION
-    frames_per_scene = total_frames // len(selected)
-    frame_number = 0
-
-    for scene_index, (joke, photo) in enumerate(
-        zip(selected, photos)
-    ):
-        for local_frame in range(frames_per_scene):
-            progress = local_frame / max(1, frames_per_scene - 1)
-            current_time = frame_number / FPS_PUBLICACION
-            caption = base.caption_at_time(groups, current_time)
-
-            frame = base.make_frame(
-                photo, joke, progress, caption
-            )
-
-            frame.save(
-                frames_dir / f"frame_{frame_number:05d}.jpg",
-                quality=88,
-            )
-            frame_number += 1
-
-        print(f"Escena {scene_index + 1} lista.")
-
-    while frame_number < total_frames:
-        current_time = frame_number / FPS_PUBLICACION
-        caption = base.caption_at_time(groups, current_time)
-
-        frame = base.make_frame(
-            photos[-1], selected[-1], 1.0, caption
-        )
-
-        frame.save(
-            frames_dir / f"frame_{frame_number:05d}.jpg",
-            quality=88,
-        )
-        frame_number += 1
-
-    command = [
-        "ffmpeg", "-y",
-        "-framerate", str(FPS_PUBLICACION),
-        "-i", str(frames_dir / "frame_%05d.jpg"),
-        "-i", str(audio_path),
-        "-t", str(duration),
-        "-c:v", "libx264",
-        "-preset", "veryfast",
-        "-pix_fmt", "yuv420p",
-        "-r", str(FPS_PUBLICACION),
-        "-c:a", "aac",
-        "-ar", "48000",
-        "-b:a", "128k",
-        "-movflags", "+faststart",
-        OUTPUT,
+def cargar_fuente(tamano, negrita=True):
+    posibles = [
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        "/usr/share/fonts/truetype/liberation2/LiberationSans-Bold.ttf",
+        "/usr/share/fonts/truetype/liberation2/LiberationSans-Regular.ttf",
     ]
 
-    print("Creando Reel corto...")
-    subprocess.run(command, check=True)
+    for ruta in posibles:
+        if os.path.exists(ruta):
+            try:
+                return ImageFont.truetype(ruta, tamano)
+            except OSError:
+                pass
 
-    result = subprocess.run(
-        [
-            "ffprobe", "-v", "error",
-            "-show_entries", "format=duration",
-            "-of", "default=noprint_wrappers=1:nokey=1",
-            OUTPUT,
-        ],
-        check=True,
-        capture_output=True,
-        text=True,
+    return ImageFont.load_default()
+
+
+def descargar_foto(url, destino):
+    respuesta = requests.get(
+        url,
+        timeout=35,
+        headers={"User-Agent": "NelsonLuchaReels/1.0"}
+    )
+    respuesta.raise_for_status()
+
+    with open(destino, "wb") as archivo:
+        archivo.write(respuesta.content)
+
+    # Verificar que realmente sea una imagen.
+    with Image.open(destino) as imagen:
+        imagen.verify()
+
+
+def obtener_foto(indice, destino):
+    # Intentar las fotos en orden aleatorio, sin depender
+    # de un único servidor.
+    urls = FOTOS[:]
+    random.shuffle(urls)
+
+    for url in urls:
+        try:
+            descargar_foto(url, destino)
+            return
+        except Exception as error:
+            print(f"No se pudo descargar una foto: {error}")
+
+    raise RuntimeError(
+        "No se pudo descargar ninguna fotografía. "
+        "Comprueba el acceso a Internet."
     )
 
-    actual_duration = float(result.stdout.strip())
 
-    if actual_duration > MAX_DURATION:
-        raise RuntimeError(
-            f"El MP4 dura {actual_duration:.1f} segundos. "
-            "Se cancela la subida."
+def ajustar_fondo(imagen):
+    imagen = imagen.convert("RGB")
+
+    escala = max(
+        ANCHO / imagen.width,
+        ALTO / imagen.height
+    )
+
+    nuevo_ancho = int(imagen.width * escala)
+    nuevo_alto = int(imagen.height * escala)
+
+    imagen = imagen.resize(
+        (nuevo_ancho, nuevo_alto),
+        Image.Resampling.LANCZOS
+    )
+
+    izquierda = (nuevo_ancho - ANCHO) // 2
+    arriba = (nuevo_alto - ALTO) // 2
+
+    imagen = imagen.crop(
+        (izquierda, arriba, izquierda + ANCHO, arriba + ALTO)
+    )
+
+    imagen = ImageEnhance.Brightness(imagen).enhance(0.66)
+    return imagen
+
+
+def dibujar_texto_centrado(
+    dibujo, texto, centro_y, fuente, ancho_maximo
+):
+    palabras = texto.split()
+    lineas = []
+    actual = ""
+
+    for palabra in palabras:
+        prueba = f"{actual} {palabra}".strip()
+        caja = dibujo.textbbox(
+            (0, 0), prueba, font=fuente, stroke_width=2
         )
 
-    if not Path(OUTPUT).exists() or Path(OUTPUT).stat().st_size < 100_000:
-        raise RuntimeError("El video no se creó correctamente.")
+        if caja[2] - caja[0] <= ancho_maximo:
+            actual = prueba
+        else:
+            if actual:
+                lineas.append(actual)
+            actual = palabra
 
-    print(f"Video listo: {actual_duration:.1f} segundos.")
-    subir_a_cloudinary(OUTPUT)
+    if actual:
+        lineas.append(actual)
 
+    alturas = []
+    for linea in lineas:
+        caja = dibujo.textbbox(
+            (0, 0), linea, font=fuente, stroke_width=2
+        )
+        alturas.append(caja[3] - caja[1] + 18)
+
+    y = centro_y - sum(alturas) // 2
+
+    for linea, altura in zip(lineas, alturas):
+        caja = dibujo.textbbox(
+            (0, 0), linea, font=fuente, stroke_width=2
+        )
+        ancho_texto = caja[2] - caja[0]
+        x = (ANCHO - ancho_texto) // 2
+
+        dibujo.text(
+            (x, y),
+            linea,
+            font=fuente,
+            fill="white",
+            stroke_width=3,
+            stroke_fill="black"
+        )
+        y += altura
+
+
+def crear_escena(foto, frase, destino, numero):
+    with Image.open(foto) as original:
+        fondo = ajustar_fondo(original)
+
+    dibujo = ImageDraw.Draw(fondo)
+
+    fuente_titulo = cargar_fuente(53)
+    fuente_marca = cargar_fuente(25)
+    fuente_firma = cargar_fuente(23)
+
+    dibujar_texto_centrado(
+        dibujo,
+        frase,
+        ALTO // 2,
+        fuente_titulo,
+        ANCHO - 90
+    )
+
+    dibujo.text(
+        (35, 35),
+        MARCA,
+        font=fuente_marca,
+        fill="white",
+        stroke_width=2,
+        stroke_fill="black"
+    )
+
+    dibujo.text(
+        (ANCHO - 35, ALTO - 65),
+        FIRMA,
+        font=fuente_firma,
+        fill="white",
+        anchor="ra",
+        stroke_width=2,
+        stroke_fill="black"
+    )
+
+    fondo.save(destino, quality=94)
+
+
+# ============================================================
+# NARRACIÓN EN ESPAÑOL
+# ============================================================
+
+async def generar_narracion(texto, destino):
+    voz = os.getenv("EDGE_TTS_VOICE", "es-MX-DaliaNeural")
+
+    comunicacion = edge_tts.Communicate(
+        texto,
+        voice=voz,
+        rate="+8%",
+        volume="+0%"
+    )
+
+    await comunicacion.save(destino)
+
+
+# ============================================================
+# GENERAR VIDEO VERTICAL
+# ============================================================
+
+def crear_video():
+    CARPETA.mkdir(parents=True, exist_ok=True)
+
+    frases = random.sample(FRASES, k=TOTAL_ESCENAS)
+    escenas = []
+    clips = []
+
+    for i, frase in enumerate(frases):
+        foto = CARPETA / f"foto_{i}.jpg"
+        imagen_texto = CARPETA / f"escena_{i}.jpg"
+        clip = CARPETA / f"clip_{i}.mp4"
+
+        print(f"Preparando escena {i + 1}/{TOTAL_ESCENAS}...")
+
+        obtener_foto(i, foto)
+        crear_escena(foto, frase, imagen_texto, i)
+
+        duracion = SEGUNDOS_ESCENA
+        cuadros = FPS * duracion
+
+        filtro = (
+            f"scale={ANCHO}:{ALTO}:"
+            "force_original_aspect_ratio=increase,"
+            f"crop={ANCHO}:{ALTO},"
+            f"zoompan=z='min(zoom+0.0007,1.05)':"
+            f"d={cuadros}:s={ANCHO}x{ALTO}:fps={FPS},"
+            "format=yuv420p"
+        )
+
+        ejecutar([
+            "ffmpeg", "-y",
+            "-loop", "1",
+            "-i", str(imagen_texto),
+            "-t", str(duracion),
+            "-vf", filtro,
+            "-r", str(FPS),
+            "-an",
+            "-c:v", "libx264",
+            "-preset", "veryfast",
+            "-pix_fmt", "yuv420p",
+            str(clip)
+        ])
+
+        clips.append(clip)
+
+    lista = CARPETA / "clips.txt"
+
+    with open(lista, "w", encoding="utf-8") as archivo:
+        for clip in clips:
+            ruta = clip.resolve().as_posix()
+            archivo.write(f"file '{ruta}'\n")
+
+    video_sin_voz = CARPETA / "video_sin_voz.mp4"
+
+    ejecutar([
+        "ffmpeg", "-y",
+        "-f", "concat",
+        "-safe", "0",
+        "-i", str(lista),
+        "-c", "copy",
+        str(video_sin_voz)
+    ])
+
+    texto_narracion = " ".join(frases)
+    audio = CARPETA / "narracion.mp3"
+
+    print("Generando narración en español...")
+    asyncio.run(generar_narracion(texto_narracion, str(audio)))
+
+    duracion_total = TOTAL_ESCENAS * SEGUNDOS_ESCENA
+
+    ejecutar([
+        "ffmpeg", "-y",
+        "-i", str(video_sin_voz),
+        "-i", str(audio),
+        "-filter_complex",
+        "[1:a]apad,volume=1.0[a]",
+        "-map", "0:v:0",
+        "-map", "[a]",
+        "-t", str(duracion_total),
+        "-c:v", "copy",
+        "-c:a", "aac",
+        "-b:a", "128k",
+        "-movflags", "+faststart",
+        OUTPUT
+    ])
+
+    print(f"Video creado: {OUTPUT}")
+    return frases
+
+
+# ============================================================
+# SUBIR VIDEO A CLOUDINARY CON PRESET UNSIGNED
+# ============================================================
+
+def subir_a_cloudinary(video_path):
+    if not CLOUD_NAME:
+        raise RuntimeError(
+            "Falta el secreto CLOUDINARY_CLOUD_NAME en GitHub."
+        )
+
+    if not UPLOAD_PRESET:
+        raise RuntimeError(
+            "Falta CLOUDINARY_UPLOAD_PRESET."
+        )
+
+    endpoint = (
+        f"https://api.cloudinary.com/v1_1/"
+        f"{CLOUD_NAME}/video/upload"
+    )
+
+    print("Subiendo video a Cloudinary con preset unsigned...")
+
+    with open(video_path, "rb") as video_file:
+        respuesta = requests.post(
+            endpoint,
+            data={
+                "upload_preset": UPLOAD_PRESET,
+                "folder": "reels_graciosos",
+            },
+            files={
+                "file": (
+                    os.path.basename(video_path),
+                    video_file,
+                    "video/mp4"
+                )
+            },
+            timeout=240
+        )
+
+    if respuesta.status_code not in (200, 201):
+        raise RuntimeError(
+            "Cloudinary rechazó la subida: "
+            f"{respuesta.status_code} {respuesta.text[:1500]}"
+        )
+
+    datos = respuesta.json()
+    url = datos.get("secure_url")
+
+    if not url or not url.startswith("https://"):
+        raise RuntimeError(
+            "Cloudinary no devolvió una URL HTTPS válida."
+        )
+
+    with open(VIDEO_URL_FILE, "w", encoding="utf-8") as archivo:
+        archivo.write(url)
+
+    print("Subida completada.")
+    print("URL guardada en video_url.txt")
+    return url
+
+
+# ============================================================
+# PROGRAMA PRINCIPAL
+# ============================================================
 
 def main():
-    crear_video_corto()
+    print("=== GENERADOR DE REELS GRACIOSOS ===")
+
+    if not os.path.exists("ffmpeg") and not os.getenv("PATH"):
+        print("Aviso: comprueba que FFmpeg esté instalado.")
+
+    crear_video()
+    url = subir_a_cloudinary(OUTPUT)
+
+    print("=== PROCESO TERMINADO ===")
+    print(f"Video: {OUTPUT}")
+    print(f"URL: {url}")
 
 
 if __name__ == "__main__":
