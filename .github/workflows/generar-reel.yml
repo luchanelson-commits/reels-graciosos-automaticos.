@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: reels-graciosos
@@ -18,26 +18,28 @@ jobs:
     timeout-minutes: 20
 
     steps:
-      - name: Descargar el repositorio
+      - name: Descargar repositorio
         uses: actions/checkout@v4
 
       - name: Preparar Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements.txt
 
       - name: Instalar dependencias
         run: |
           python -m pip install --upgrade pip
-          pip install pillow requests
+          pip install -r requirements.txt
 
-      - name: Generar Reel gracioso
+      - name: Generar Reel
         run: python generar_reel.py
 
-      - name: Guardar Reel generado
+      - name: Guardar Reel para descargar
         uses: actions/upload-artifact@v4
         with:
           name: reel-gracioso
-          path: salida/
+          path: salida/reel_gracioso.mp4
           if-no-files-found: error
           retention-days: 7
