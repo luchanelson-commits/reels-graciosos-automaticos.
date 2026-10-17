@@ -11,7 +11,7 @@ import edge_tts
 from PIL import Image, ImageDraw, ImageFont, ImageEnhance
 
 # ==================================================
-# CONFIGURACION GENERAL
+# CONFIGURACION
 # ==================================================
 
 WIDTH = 720
@@ -21,18 +21,25 @@ MIN_DURATION = 30
 
 VOICE = "es-MX-DaliaNeural"
 OUTPUT = "reel_gracioso.mp4"
-
 WATERMARK = "Nelson Lucha Reels Graciosos"
 SIGNATURE = "Nelson Lucha"
 
 WORK = Path("trabajo_reel")
 WORK.mkdir(exist_ok=True)
 
-API_URL = "https://commons.wikimedia.org/w/api.php"
-
 HEADERS = {
-    "User-Agent": "NelsonLuchaReels/1.0 (personal video project)"
+    "User-Agent": "NelsonLuchaReels/1.0"
 }
+
+# Fotografias de respaldo de Unsplash.
+# Son fotografias de animales; se usan para comprobar
+# que el video pueda crearse aunque falle Wikimedia.
+BACKUP_PHOTOS = [
+    "https://images.unsplash.com/photo-1543466835-00a7907e9de1?w=900",
+    "https://images.unsplash.com/photo-1514888286974-6c03e2ca1dba?w=900",
+    "https://images.unsplash.com/photo-1552053831-71594a27632d?w=900",
+    "https://images.unsplash.com/photo-1517849845537-4d257902454a?w=900",
+]
 
 # ==================================================
 # CHISTES
@@ -143,172 +150,164 @@ JOKES = [
 ]
 
 # ==================================================
-# BUSCAR Y DESCARGAR FOTOGRAFIAS
+# DESCARGA Y VALIDACION DE IMAGENES
 # ==================================================
 
-def allowed_license(metadata):
-    name = metadata.get("LicenseShortName", {}).get("value", "")
-    license_text = name.lower().replace("-", " ").strip()
-
-    # No usar licencias que prohíban uso comercial o modificaciones.
-    if "nc" in license_text.split():
-        return False
-    if "nd" in license_text.split():
+def valid_image(path):
+    try:
+        with Image.open(path) as image:
+            image.verify()
+        return True
+    except Exception:
         return False
 
-    if "public domain" in license_text:
-        return True
-    if "cc0" in license_text:
-        return True
-    if "cc by" in license_text:
-        return True
 
-    return False
+def download_image(url, path):
+    response = requests.get(
+        url,
+        headers=HEADERS,
+        timeout=35,
+    )
+    response.raise_for_status()
+
+    content_type = response.headers.get("Content-Type", "")
+    if not content_type.lower().startswith("image/"):
+        raise ValueError(
+            f"La dirección no devolvió una imagen: {content_type}"
+        )
+
+    path.write_bytes(response.content)
+
+    if not valid_image(path):
+        path.unlink(missing_ok=True)
+        raise ValueError("El archivo descargado no es una imagen válida.")
+
+    return path
 
 
 def search_photo(query, index):
-    searches = [
+    # Primero se intenta buscar en Wikimedia Commons.
+    api = "https://commons.wikimedia.org/w/api.php"
+    search_terms = [
         query,
         "funny people",
         "people laughing",
         "funny animals",
-        "people at home",
-        "funny situation",
     ]
 
-    seen_titles = set()
-
-    for term in searches:
-        print(f"Buscando imágenes: {term}")
-
+    for term in search_terms:
         try:
+            print(f"Buscando en Wikimedia: {term}")
+
             response = requests.get(
-                API_URL,
+                api,
                 params={
                     "action": "query",
                     "format": "json",
-                    "list": "search",
-                    "srsearch": term,
-                    "srnamespace": 6,
-                    "srlimit": 30,
+                    "generator": "search",
+                    "gsrsearch": term,
+                    "gsrnamespace": 6,
+                    "gsrlimit": 20,
+                    "prop": "imageinfo",
+                    "iiprop": "url|mime|extmetadata",
                 },
                 headers=HEADERS,
-                timeout=30,
+                timeout=25,
             )
             response.raise_for_status()
 
-            results = response.json().get(
+            pages = response.json().get(
                 "query", {}
-            ).get("search", [])
+            ).get("pages", {})
 
-            titles = [
-                item["title"]
-                for item in results
-                if item.get("title")
-                and item["title"] not in seen_titles
-            ]
+            candidates = list(pages.values())
+            random.shuffle(candidates)
 
-            seen_titles.update(titles)
-            random.shuffle(titles)
+            for page in candidates:
+                info_list = page.get("imageinfo", [])
+                if not info_list:
+                    continue
 
-            for start in range(0, len(titles), 10):
-                batch = titles[start:start + 10]
+                info = info_list[0]
+                mime = info.get("mime", "")
 
-                detail_response = requests.get(
-                    API_URL,
-                    params={
-                        "action": "query",
-                        "format": "json",
-                        "titles": "|".join(batch),
-                        "prop": "imageinfo",
-                        "iiprop": "url|mime|extmetadata",
-                    },
-                    headers=HEADERS,
-                    timeout=30,
-                )
-                detail_response.raise_for_status()
+                if mime not in (
+                    "image/jpeg",
+                    "image/png",
+                    "image/webp",
+                ):
+                    continue
 
-                pages = detail_response.json().get(
-                    "query", {}
-                ).get("pages", {})
+                metadata = info.get("extmetadata", {})
+                license_name = metadata.get(
+                    "LicenseShortName", {}
+                ).get("value", "").lower().replace("-", " ")
 
-                for page in pages.values():
-                    info_list = page.get("imageinfo", [])
-                    if not info_list:
-                        continue
+                # Aceptar licencias de dominio público o Creative Commons
+                # que permitan modificaciones y reutilización.
+                if not any(term in license_name for term in (
+                    "public domain", "cc0", "cc by"
+                )):
+                    continue
 
-                    info = info_list[0]
-                    mime = info.get("mime", "")
+                image_url = info.get("url")
+                if not image_url:
+                    continue
 
-                    if not mime.startswith("image/"):
-                        continue
+                path = WORK / f"foto_{index}.jpg"
 
-                    if mime in (
-                        "image/svg+xml",
-                        "image/gif",
-                    ):
-                        continue
-
-                    metadata = info.get("extmetadata", {})
-
-                    if not allowed_license(metadata):
-                        continue
-
-                    image_url = info.get("url")
-                    if not image_url:
-                        continue
-
-                    image_response = requests.get(
-                        image_url,
-                        headers=HEADERS,
-                        timeout=45,
-                    )
-                    image_response.raise_for_status()
-
-                    path = WORK / f"foto_{index}.jpg"
-                    path.write_bytes(image_response.content)
-
-                    try:
-                        with Image.open(path) as img:
-                            img.verify()
-                    except Exception:
-                        path.unlink(missing_ok=True)
-                        continue
-
-                    author = metadata.get(
-                        "Artist", {}
-                    ).get("value", "Autor no indicado")
-
-                    print(f"Foto: {page.get('title')}")
-                    print(f"Licencia: {metadata.get('LicenseShortName', {}).get('value', '')}")
-                    print(f"Autor: {author}")
-
+                try:
+                    download_image(image_url, path)
+                    print("Fotografía Wikimedia:", page.get("title"))
+                    print("Licencia:", license_name)
                     return path
+                except Exception as exc:
+                    print(f"No se pudo usar esa foto: {exc}")
 
         except Exception as exc:
             print(
-                f"Error con búsqueda '{term}': "
+                f"Error en Wikimedia ({term}): "
                 f"{type(exc).__name__}: {exc}"
             )
 
-    return None
+    # Si Wikimedia falla, intentar fotografías de respaldo.
+    print("Probando fotografías de respaldo...")
+
+    for offset in range(len(BACKUP_PHOTOS)):
+        url = BACKUP_PHOTOS[
+            (index + offset) % len(BACKUP_PHOTOS)
+        ]
+        path = WORK / f"foto_{index}.jpg"
+
+        try:
+            download_image(url, path)
+            print("Fotografía de respaldo descargada.")
+            print("Fuente: Unsplash")
+            return path
+        except Exception as exc:
+            print(f"Error descargando respaldo: {exc}")
+
+    raise RuntimeError(
+        f"No se pudo descargar ninguna imagen para la escena {index + 1}. "
+        "Comprueba la conexión de GitHub Actions."
+    )
 
 
 # ==================================================
-# FUENTES Y FONDO
+# DISENO DEL VIDEO
 # ==================================================
 
 def get_font(size, bold=False):
-    if bold:
-        candidates = [
+    candidates = (
+        [
             "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
             "/usr/share/fonts/truetype/liberation2/LiberationSans-Bold.ttf",
         ]
-    else:
-        candidates = [
+        if bold else [
             "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
             "/usr/share/fonts/truetype/liberation2/LiberationSans-Regular.ttf",
         ]
+    )
 
     for filename in candidates:
         if os.path.exists(filename):
@@ -340,11 +339,14 @@ def fit_background(photo_path):
     image = image.resize(
         (WIDTH, HEIGHT), Image.Resampling.LANCZOS
     )
-    return ImageEnhance.Brightness(image).enhance(0.52)
+
+    return ImageEnhance.Brightness(image).enhance(0.55)
 
 
 def draw_centered(draw, text, y, font, color="white"):
-    box = draw.textbbox((0, 0), text, font=font, stroke_width=2)
+    box = draw.textbbox(
+        (0, 0), text, font=font, stroke_width=2
+    )
     x = (WIDTH - (box[2] - box[0])) // 2
 
     draw.text(
@@ -358,19 +360,12 @@ def draw_centered(draw, text, y, font, color="white"):
 
 
 def draw_wrapped(draw, text, y, font, max_chars=25, color="white"):
-    lines = textwrap.wrap(text, width=max_chars)
-    line_height = font.size + 15
-
-    for line in lines:
+    for line in textwrap.wrap(text, width=max_chars):
         draw_centered(draw, line, y, font, color)
-        y += line_height
+        y += font.size + 15
 
     return y
 
-
-# ==================================================
-# CREAR FOTOGRAMA
-# ==================================================
 
 def make_frame(photo_path, joke, progress):
     image = fit_background(photo_path)
@@ -381,9 +376,13 @@ def make_frame(photo_path, joke, progress):
         radius=20,
         fill="black",
     )
+
     draw_centered(
-        draw, "😂 ¡RÍE UN MOMENTO!", 48,
-        get_font(29, True)
+        draw,
+        "¡RÍE UN MOMENTO!",
+        48,
+        get_font(29, True),
+        "#FFE66D",
     )
 
     draw_wrapped(
@@ -402,6 +401,7 @@ def make_frame(photo_path, joke, progress):
         radius=25,
         fill="black",
     )
+
     draw_wrapped(
         draw,
         caption,
@@ -411,16 +411,21 @@ def make_frame(photo_path, joke, progress):
     )
 
     draw_centered(
-        draw, WATERMARK, 1090,
-        get_font(23, True)
+        draw,
+        WATERMARK,
+        1090,
+        get_font(23, True),
     )
+
     draw_centered(
-        draw, SIGNATURE, 1132,
+        draw,
+        SIGNATURE,
+        1132,
         get_font(28, True),
         "#FFE66D",
     )
 
-    # Barra de progreso de cada escena
+    # Barra de progreso.
     x1, y1 = 45, 1205
     bar_width = WIDTH - 90
 
@@ -429,8 +434,14 @@ def make_frame(photo_path, joke, progress):
         radius=6,
         fill="#666666",
     )
+
     draw.rounded_rectangle(
-        (x1, y1, x1 + int(bar_width * progress), y1 + 12),
+        (
+            x1,
+            y1,
+            x1 + int(bar_width * progress),
+            y1 + 12,
+        ),
         radius=6,
         fill="#FFE66D",
     )
@@ -439,7 +450,7 @@ def make_frame(photo_path, joke, progress):
 
 
 # ==================================================
-# CREAR NARRACION
+# NARRACION EN ESPANOL
 # ==================================================
 
 async def create_voice(jokes, audio_path):
@@ -464,6 +475,7 @@ async def create_voice(jokes, audio_path):
         rate="-5%",
         volume="+0%",
     )
+
     await speech.save(str(audio_path))
 
 
@@ -485,28 +497,18 @@ def get_audio_duration(audio_path):
 
 
 # ==================================================
-# PROCESO PRINCIPAL
+# GENERACION DEL REEL
 # ==================================================
 
 def main():
     selected = random.sample(JOKES, 4)
     photos = []
 
-    print("=== BUSQUEDA DE FOTOGRAFIAS ===")
+    print("Descargando fotografías para las cuatro escenas...")
 
     for index, joke in enumerate(selected):
         photo = search_photo(joke["query"], index)
-
-        if photo is None:
-            raise RuntimeError(
-                f"No se encontró una fotografía válida para la escena "
-                f"{index + 1} ({joke['query']}). "
-                "Revisa los mensajes de búsqueda anteriores."
-            )
-
         photos.append(photo)
-
-    print("Se descargaron las cuatro fotografías.")
 
     audio_path = WORK / "narracion.mp3"
     asyncio.run(create_voice(selected, audio_path))
@@ -514,8 +516,8 @@ def main():
     audio_duration = get_audio_duration(audio_path)
     duration = max(MIN_DURATION, math.ceil(audio_duration + 1))
 
-    print(f"Duración de la voz: {audio_duration:.1f} segundos")
-    print(f"Duración del Reel: {duration} segundos")
+    print(f"Duración de la narración: {audio_duration:.1f} segundos")
+    print(f"Duración del video: {duration} segundos")
 
     frames_dir = WORK / "frames"
     frames_dir.mkdir(exist_ok=True)
@@ -528,20 +530,28 @@ def main():
         zip(selected, photos)
     ):
         for local_frame in range(frames_per_scene):
-            progress = local_frame / max(1, frames_per_scene - 1)
+            progress = local_frame / max(
+                1, frames_per_scene - 1
+            )
 
             frame = make_frame(photo, joke, progress)
-            filename = frames_dir / f"frame_{frame_number:05d}.jpg"
+
+            filename = frames_dir / (
+                f"frame_{frame_number:05d}.jpg"
+            )
 
             frame.save(filename, quality=92)
             frame_number += 1
 
-        print(f"Escena {scene_index + 1} terminada.")
+        print(f"Escena {scene_index + 1} lista.")
 
-    # Completar cualquier fotograma restante.
     while frame_number < total_frames:
         frame = make_frame(photos[-1], selected[-1], 1.0)
-        filename = frames_dir / f"frame_{frame_number:05d}.jpg"
+
+        filename = frames_dir / (
+            f"frame_{frame_number:05d}.jpg"
+        )
+
         frame.save(filename, quality=92)
         frame_number += 1
 
@@ -563,23 +573,23 @@ def main():
         OUTPUT,
     ]
 
-    print("=== GENERANDO VIDEO ===")
+    print("Creando video MP4...")
     subprocess.run(command, check=True)
 
     if not os.path.exists(OUTPUT):
-        raise RuntimeError("No se creó el archivo de video.")
+        raise RuntimeError("No se creó el archivo MP4.")
 
     size = os.path.getsize(OUTPUT)
 
     if size < 100_000:
-        raise RuntimeError("El archivo de video es demasiado pequeño.")
+        raise RuntimeError("El archivo MP4 parece estar incompleto.")
 
-    print("===================================")
+    print("====================================")
     print("¡REEL CREADO CORRECTAMENTE!")
     print(f"Archivo: {OUTPUT}")
     print(f"Duración: {duration} segundos")
     print(f"Tamaño: {size / 1024 / 1024:.2f} MB")
-    print("===================================")
+    print("====================================")
 
 
 if __name__ == "__main__":
