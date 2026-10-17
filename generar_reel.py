@@ -1,5 +1,7 @@
 import os
 import io
+import re
+import math
 import random
 import asyncio
 import subprocess
@@ -11,7 +13,7 @@ import edge_tts
 from PIL import Image, ImageDraw, ImageFont, ImageEnhance, ImageOps
 
 # =========================================================
-# CONFIGURACIÓN GENERAL
+# CONFIGURACION GENERAL
 # =========================================================
 
 WIDTH = 720
@@ -140,7 +142,7 @@ def get_font(size, italic=False):
 
 
 # =========================================================
-# BÚSQUEDA DE FOTOGRAFÍAS
+# BUSCAR FOTOGRAFIAS
 # =========================================================
 
 def search_photo(query):
@@ -219,7 +221,7 @@ def search_photo(query):
 
                 result = {
                     "url": info["url"],
-                    "title": page.get("title", "Fotografía"),
+                    "title": page.get("title", "Fotografia"),
                     "license": license_name,
                     "artist": metadata.get(
                         "Artist", {}
@@ -231,9 +233,8 @@ def search_photo(query):
                 }
 
                 print(
-                    f"Fotografía encontrada: {result['title']}"
+                    f"Fotografia encontrada: {result['title']}"
                 )
-
                 return result
 
         except Exception as error:
@@ -241,12 +242,12 @@ def search_photo(query):
                 f"Error buscando '{search_term}': {error}"
             )
 
-    print(f"No se encontró fotografía para: {query}")
+    print(f"No se encontro fotografia para: {query}")
     return None
 
 
 # =========================================================
-# DESCARGA Y VALIDACIÓN DE FOTOGRAFÍAS
+# DESCARGAR FOTOGRAFIAS
 # =========================================================
 
 def download_photo(photo, index):
@@ -268,11 +269,11 @@ def download_photo(photo, index):
         path = PHOTOS / f"foto_{index}.jpg"
         image.save(path, quality=94)
 
-        print(f"Fotografía descargada: {path}")
+        print(f"Fotografia descargada: {path}")
         return path
 
     except Exception as error:
-        print(f"Error descargando fotografía {index}: {error}")
+        print(f"Error descargando fotografia {index}: {error}")
         return None
 
 
@@ -287,10 +288,8 @@ def get_background(path):
                 centering=(0.5, 0.42)
             )
         except Exception as error:
-            print(f"Error preparando fotografía: {error}")
+            print(f"Error preparando fotografia: {error}")
 
-    # Si no se consigue una foto, usar un fondo neutro.
-    # No se presenta una ilustración como si fuera fotografía.
     image = Image.new("RGB", (WIDTH, HEIGHT), (45, 48, 58))
     draw = ImageDraw.Draw(image)
     draw.text(
@@ -304,7 +303,7 @@ def get_background(path):
 
 
 # =========================================================
-# MOVIMIENTO Y ASPECTO CINEMATOGRÁFICO
+# MOVIMIENTO CINEMATOGRAFICO
 # =========================================================
 
 def cinematic_frame(photo, progress):
@@ -341,7 +340,6 @@ def cinematic_frame(photo, progress):
         shade
     )
 
-    # Oscurecimiento gradual inferior para mejorar la lectura.
     gradient = Image.new("RGBA", (WIDTH, HEIGHT), (0, 0, 0, 0))
     draw = ImageDraw.Draw(gradient)
 
@@ -451,7 +449,6 @@ def add_branding(draw, progress, local_time):
         (255, 255, 255, 255)
     )
 
-    # Marca de agua permanente en la parte inferior.
     draw.rounded_rectangle(
         (50, 1190, WIDTH - 50, 1245),
         radius=20,
@@ -466,7 +463,6 @@ def add_branding(draw, progress, local_time):
         (255, 255, 255, 255)
     )
 
-    # Firma elegante al final de cada escena.
     if local_time >= SCENE_SECONDS - 1.3:
         draw.rounded_rectangle(
             (155, 985, WIDTH - 155, 1060),
@@ -512,7 +508,6 @@ def render_frame(photo, joke, progress, local_time):
             (255, 225, 75, 255)
         )
 
-    # Barra de progreso.
     bar_x = 50
     bar_y = 1155
     bar_width = WIDTH - 100
@@ -538,7 +533,7 @@ def render_frame(photo, joke, progress, local_time):
 
 
 # =========================================================
-# NARRACIÓN EN ESPAÑOL
+# NARRACION EN ESPANOL
 # =========================================================
 
 async def create_voice(jokes):
@@ -555,42 +550,86 @@ async def create_voice(jokes):
 
 
 # =========================================================
-# CRÉDITOS DE LAS FOTOGRAFÍAS
+# MEDIR LA DURACION REAL DEL AUDIO
+# =========================================================
+
+def obtener_duracion_audio():
+    ffmpeg = imageio_ffmpeg.get_ffmpeg_exe()
+
+    result = subprocess.run(
+        [ffmpeg, "-i", str(AUDIO)],
+        capture_output=True,
+        text=True,
+        check=False
+    )
+
+    output = result.stderr or result.stdout or ""
+
+    match = re.search(
+        r"Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)",
+        output
+    )
+
+    if not match:
+        raise RuntimeError(
+            "No se pudo medir la narracion. "
+            "Revisa el archivo de audio y vuelve a ejecutar."
+        )
+
+    hours, minutes, seconds = match.groups()
+
+    duration = (
+        int(hours) * 3600
+        + int(minutes) * 60
+        + float(seconds)
+    )
+
+    if duration <= 0:
+        raise RuntimeError("La narracion tiene una duracion invalida.")
+
+    return duration
+
+
+# =========================================================
+# CREDITOS DE FOTOGRAFIAS
 # =========================================================
 
 def save_credits(photos):
     path = OUT / "creditos_imagenes.txt"
 
     with open(path, "w", encoding="utf-8") as file:
-        file.write("CRÉDITOS DE FOTOGRAFÍAS\n")
+        file.write("CREDITOS DE FOTOGRAFIAS\n")
         file.write("=======================\n\n")
 
         for index, photo in enumerate(photos, start=1):
             file.write(f"ESCENA {index}\n")
 
             if not photo:
-                file.write("No se encontró fotografía.\n\n")
+                file.write("No se encontro fotografia.\n\n")
                 continue
 
             file.write(f"Archivo: {photo['title']}\n")
             file.write(f"Autor: {photo['artist']}\n")
             file.write(f"Licencia: {photo['license']}\n")
-            file.write(f"Licencia: {photo['license_url']}\n")
-            file.write(f"Página: {photo['page_url']}\n\n")
+            file.write(f"Enlace licencia: {photo['license_url']}\n")
+            file.write(f"Pagina: {photo['page_url']}\n\n")
 
 
 # =========================================================
-# GENERAR REEL
+# GENERAR REEL COMPLETO
 # =========================================================
 
 def main():
-    print("Iniciando generador de Reels...")
-    print(f"Duración prevista: {DURATION} segundos")
+    global DURATION, SCENE_SECONDS
 
+    print("Iniciando generador de Reels...")
+    print("Seleccionando cuatro chistes...")
+    
     selected = random.sample(JOKES, SCENES)
     photo_info_list = []
     backgrounds = []
 
+    # Buscar y descargar las fotografias.
     for index, joke in enumerate(selected, start=1):
         print(f"\nBuscando foto para escena {index}...")
 
@@ -599,22 +638,31 @@ def main():
 
         photo_path = download_photo(photo_info, index)
         background = get_background(photo_path)
-
         backgrounds.append(background)
 
     save_credits(photo_info_list)
 
-    print("\nGenerando narración...")
+    # Generar toda la narracion antes de decidir la duracion.
+    print("\nGenerando narracion completa...")
     asyncio.run(create_voice(selected))
 
-    # Eliminar cuadros antiguos para evitar mezclar ejecuciones.
+    # Calcular la duracion real de la voz y dejar un segundo extra.
+    audio_duration = obtener_duracion_audio()
+    DURATION = math.ceil(audio_duration + 1.0)
+    SCENE_SECONDS = DURATION / SCENES
+
+    print(f"\nDuracion de la voz: {audio_duration:.2f} segundos")
+    print(f"Duracion del video: aproximadamente {DURATION} segundos")
+    print(f"Duracion de cada escena: {SCENE_SECONDS:.2f} segundos")
+
+    # Eliminar cuadros antiguos.
     for old_frame in FRAMES.glob("frame_*.jpg"):
         old_frame.unlink()
 
-    frames_per_scene = int(SCENE_SECONDS * FPS)
+    frames_per_scene = math.ceil(SCENE_SECONDS * FPS)
     frame_number = 0
 
-    print("Creando las escenas...")
+    print("\nCreando las escenas...")
 
     for scene_index, joke in enumerate(selected):
         background = backgrounds[scene_index]
@@ -634,6 +682,7 @@ def main():
             frame.save(frame_path, quality=91)
             frame_number += 1
 
+    # Montar el video sin cortar la narracion a 30 segundos.
     ffmpeg = imageio_ffmpeg.get_ffmpeg_exe()
     input_pattern = str(FRAMES / "frame_%05d.jpg")
 
@@ -651,33 +700,33 @@ def main():
         "-crf", "23",
         "-c:a", "aac",
         "-b:a", "128k",
-        "-af", f"apad,atrim=0:{DURATION}",
-        "-t", str(DURATION),
+        "-af", "apad=pad_dur=1",
+        "-shortest",
         "-movflags", "+faststart",
         str(VIDEO)
     ]
 
-    print("\nMontando el video...")
+    print("\nMontando el video con la narracion completa...")
     subprocess.run(command, check=True)
 
-    # Limpiar únicamente los cuadros temporales.
+    # Limpiar los cuadros temporales.
     for frame in FRAMES.glob("frame_*.jpg"):
         frame.unlink()
 
-    print("\n¡Reel terminado!")
+    print("\n¡REEL TERMINADO!")
     print(f"Video: {VIDEO}")
-    print(f"Duración prevista: {DURATION} segundos")
-    print(f"Créditos: {OUT / 'creditos_imagenes.txt'}")
+    print(f"Duracion aproximada: {DURATION} segundos")
+    print(f"Creditos: {OUT / 'creditos_imagenes.txt'}")
 
     missing = sum(1 for photo in photo_info_list if photo is None)
 
     if missing:
         print(
             f"AVISO: {missing} escena(s) no consiguieron foto. "
-            "Revisa los mensajes de búsqueda anteriores."
+            "Revisa los mensajes de busqueda anteriores."
         )
     else:
-        print("Las cuatro escenas encontraron fotografías.")
+        print("Las cuatro escenas encontraron fotografias.")
 
 
 if __name__ == "__main__":
