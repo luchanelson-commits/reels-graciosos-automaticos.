@@ -1,4 +1,4 @@
-name: Generar y subir Reel corto
+name: Generar y publicar Reel gracioso
 
 on:
   schedule:
@@ -50,6 +50,51 @@ jobs:
           CLOUDINARY_API_KEY: ${{ secrets.CLOUDINARY_API_KEY }}
           CLOUDINARY_API_SECRET: ${{ secrets.CLOUDINARY_API_SECRET }}
         run: python generar_reel_publicacion.py
+
+      - name: Activar publicaciones de Facebook e Instagram
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GH_DISPATCH_TOKEN }}
+          script: |
+            const fs = require('fs');
+
+            const videoUrl = fs.readFileSync(
+              'video_url.txt', 'utf8'
+            ).trim();
+
+            if (!videoUrl.startsWith('https://')) {
+              throw new Error('La URL del video no es válida.');
+            }
+
+            const caption = [
+              '😂 ¡Ríete un rato y comparte la alegría!',
+              '',
+              'Si te sacó una sonrisa, comenta 😂 y etiqueta a esa persona que siempre te hace reír.',
+              '',
+              '#NelsonLucha #ReelsGraciosos #Humor #Risas'
+            ].join('\n');
+
+            const owner = 'luchanelson-commits';
+
+            for (const repo of [
+              'facebook_motivacion',
+              'instagram_motivacion'
+            ]) {
+              console.log(`Activando publicación en ${repo}...`);
+
+              await github.rest.actions.createWorkflowDispatch({
+                owner,
+                repo,
+                workflow_id: 'publicar_reel.yml',
+                ref: 'main',
+                inputs: {
+                  video_url: videoUrl,
+                  caption: caption
+                }
+              });
+
+              console.log(`Flujo activado en ${repo}.`);
+            }
 
       - name: Guardar video y URL como artefactos
         uses: actions/upload-artifact@v4
