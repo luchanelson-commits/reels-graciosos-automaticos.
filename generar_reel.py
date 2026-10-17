@@ -1,27 +1,29 @@
-import asyncio
+import os
+import io
+import re
+import math
 import random
-import shutil
+import asyncio
 import subprocess
 from pathlib import Path
 
 import requests
-from PIL import Image, ImageDraw, ImageFont, ImageOps
-import edge_tts
 import imageio_ffmpeg
+import edge_tts
+from PIL import Image, ImageDraw, ImageFont, ImageEnhance, ImageFilter
 
-
-# =====================================================
-# NELSON LUCHA REELS GRACIOSOS
-# Reels verticales de 15 segundos con narración
-# =====================================================
+# ==================================================
+# CONFIGURACIÓN
+# ==================================================
 
 WIDTH = 720
 HEIGHT = 1280
 FPS = 12
-SCENE_SECONDS = 5
-TOTAL_SCENES = 3
-
+DURATION = 30
+SCENES = 4
+SCENE_SECONDS = DURATION / SCENES
 VOICE = "es-MX-DaliaNeural"
+
 BRAND = "Nelson Lucha Reels Graciosos"
 SIGNATURE = "Nelson Lucha"
 
@@ -30,123 +32,307 @@ FRAMES = OUT / "frames"
 PHOTOS = OUT / "fotos"
 VIDEO = OUT / "reel_gracioso.mp4"
 AUDIO = OUT / "narracion.mp3"
-CREDITS = OUT / "creditos_imagenes.txt"
 
-OUT.mkdir(parents=True, exist_ok=True)
-PHOTOS.mkdir(parents=True, exist_ok=True)
+for folder in (OUT, FRAMES, PHOTOS):
+    folder.mkdir(parents=True, exist_ok=True)
 
-
-# =====================================================
-# CHISTES CORTOS: SE ELIGEN TRES DIFERENTES POR REEL
-# =====================================================
+# ==================================================
+# CHISTES CORTOS
+# ==================================================
 
 JOKES = [
     {
-        "search": "funny dog face",
-        "title": "YO CUIDANDO LA DIETA",
-        "text": "HOY SOLO ENSALADA",
-        "punch": "¿QUIÉN PIDIÓ PIZZA? 😂",
-        "voice": "Hoy solo voy a comer ensalada. ¿Quién pidió pizza? ¡Bueno, que no se desperdicie!"
+        "query": "funny dog real photo",
+        "title": "CUANDO TE DESCUBREN",
+        "text": "Yo no fui...",
+        "punch": "¡Pero el perro ya confesó! 😂",
+        "voice": "Yo no fui... ¡pero el perro ya confesó."
     },
     {
-        "search": "funny cat expression",
-        "title": "CUANDO SUENA LA ALARMA",
-        "text": "CINCO MINUTITOS MÁS",
-        "punch": "¡YA ES MAÑANA OTRA VEZ!",
-        "voice": "Cinco minutitos más, digo yo. Abro los ojos y ya es mañana otra vez."
+        "query": "funny cat expression photograph",
+        "title": "EL JEFE DE LA CASA",
+        "text": "Mi gato no paga alquiler...",
+        "punch": "¡Y todavía me mira feo! 😹",
+        "voice": "Mi gato no paga alquiler... ¡y todavía me mira feo!"
     },
     {
-        "search": "funny surprised person",
-        "title": "CUANDO REVISO MI SALDO",
-        "text": "YO ME SENTÍA RICO",
-        "punch": "MI BANCO SE BURLA DE MÍ",
-        "voice": "Yo me sentía millonario. Revisé mi saldo y se me quitó hasta la sonrisa."
+        "query": "funny surprised person photograph",
+        "title": "EL SUELDO",
+        "text": "Cobré y me sentí millonario...",
+        "punch": "¡Hasta que pagué las cuentas! 😂",
+        "voice": "Cobré y me sentí millonario... ¡hasta que pagué las cuentas!"
     },
     {
-        "search": "funny monkey face",
-        "title": "HOY SÍ HARÉ EJERCICIO",
-        "text": "PRIMERO UN DESCANSITO",
-        "punch": "¡YA ME CANSÉ! 😂",
-        "voice": "Hoy sí haré ejercicio. Me senté a descansar un momento y ya terminé la rutina."
+        "query": "funny dog looking at food photo",
+        "title": "LA DIETA",
+        "text": "Hoy sí comienzo la dieta...",
+        "punch": "¡Después de esta última comida! 🤣",
+        "voice": "Hoy sí comienzo la dieta... ¡después de esta última comida!"
     },
     {
-        "search": "funny baby expression",
-        "title": "CUANDO DICEN: ES FÁCIL",
-        "text": "ESO LO HAGO RÁPIDO",
-        "punch": "TRES HORAS DESPUÉS...",
-        "voice": "Me dijeron que era fácil. Tres horas después, aquí sigo preguntándome quién me mandó."
+        "query": "funny person reaction photo",
+        "title": "EL LUNES",
+        "text": "Mañana comienzo a hacer ejercicio...",
+        "punch": "¡Eso dije el lunes pasado! 😅",
+        "voice": "Mañana comienzo a hacer ejercicio... ¡eso dije el lunes pasado!"
     },
     {
-        "search": "funny goat face",
-        "title": "YO DANDO CONSEJOS",
-        "text": "HAY QUE ORGANIZARSE",
-        "punch": "¿DÓNDE DEJÉ LAS LLAVES?",
-        "voice": "Yo dando consejos para organizarse. Y ni siquiera encuentro las llaves que tengo en la mano."
+        "query": "funny cat sitting photograph",
+        "title": "TRABAJO EN EQUIPO",
+        "text": "Mi gato me ayuda a trabajar...",
+        "punch": "¡Se acuesta sobre el teclado! 😹",
+        "voice": "Mi gato me ayuda a trabajar... ¡se acuesta sobre el teclado!"
     },
     {
-        "search": "funny person sleeping",
-        "title": "SOLO UN VIDEO MÁS",
-        "text": "YA ME VOY A DORMIR",
-        "punch": "SON LAS TRES DE LA MAÑANA",
-        "voice": "Solo un video más, dije. Ahora son las tres de la mañana y tengo sueño hasta en las pestañas."
+        "query": "funny dog guilty expression photo",
+        "title": "NO HAY EVIDENCIA",
+        "text": "En esta casa nadie rompió nada...",
+        "punch": "¡Solo falta interrogar al perro! 😂",
+        "voice": "En esta casa nadie rompió nada... ¡solo falta interrogar al perro!"
     },
     {
-        "search": "funny dog looking guilty",
-        "title": "¿QUIÉN HIZO EL DESASTRE?",
-        "text": "YO NO FUI",
-        "punch": "EL PERRO NI PARPADEA 😂",
-        "voice": "¿Quién hizo este desastre? Yo no fui, dice mi perro con una cara que no le cree ni su dueño."
-    },
-    {
-        "search": "funny man reaction",
-        "title": "CUANDO ME PAGAN",
-        "text": "AHORA SÍ, A DISFRUTAR",
-        "punch": "LAS DEUDAS LLEGAN PRIMERO",
-        "voice": "Cuando me pagan, ya me siento rico. Después llegan las deudas y me recuerdan la realidad."
-    },
-    {
-        "search": "funny cat looking surprised",
-        "title": "CUANDO ABRO LA NEVERA",
-        "text": "A VER QUÉ HAY",
-        "punch": "LO MISMO QUE HACE DIEZ MINUTOS",
-        "voice": "Abro la nevera para ver qué hay. La cierro, vuelvo a abrirla y aparece exactamente lo mismo."
+        "query": "funny person eating food photograph",
+        "title": "SOLO UNA PROBADITA",
+        "text": "Dije que solo probaría un poquito...",
+        "punch": "¡Y ya no quedó nada! 🤣",
+        "voice": "Dije que solo probaría un poquito... ¡y ya no quedó nada!"
     },
 ]
 
 
-# =====================================================
-# FUENTES
-# =====================================================
+# ==================================================
+# TIPOGRAFÍA
+# ==================================================
 
 def get_font(size, italic=False):
+    candidates = []
+
     if italic:
-        candidates = [
+        candidates += [
             "/usr/share/fonts/truetype/dejavu/DejaVuSans-BoldOblique.ttf",
-            "/usr/share/fonts/truetype/dejavu/DejaVuSans-Oblique.ttf",
             "/usr/share/fonts/truetype/liberation2/LiberationSans-BoldItalic.ttf",
         ]
-    else:
-        candidates = [
-            "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
-            "/usr/share/fonts/truetype/liberation2/LiberationSans-Bold.ttf",
-        ]
+
+    candidates += [
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+        "/usr/share/fonts/truetype/liberation2/LiberationSans-Bold.ttf",
+    ]
 
     for path in candidates:
-        if Path(path).exists():
+        if os.path.exists(path):
             return ImageFont.truetype(path, size)
 
     return ImageFont.load_default()
 
 
-def draw_centered(draw, text, y, fnt, color, max_width=630):
+# ==================================================
+# BUSCAR FOTOGRAFÍAS REALES CON LICENCIA
+# ==================================================
+
+def search_photo(query):
+    api = "https://commons.wikimedia.org/w/api.php"
+
+    params = {
+        "action": "query",
+        "format": "json",
+        "generator": "search",
+        "gsrsearch": f"filetype:bitmap {query}",
+        "gsrnamespace": 6,
+        "gsrlimit": 20,
+        "prop": "imageinfo",
+        "iiprop": "url|mime|extmetadata|size",
+    }
+
+    headers = {
+        "User-Agent": "NelsonLuchaReels/1.0 (video generator)"
+    }
+
+    try:
+        response = requests.get(
+            api,
+            params=params,
+            headers=headers,
+            timeout=25
+        )
+        response.raise_for_status()
+        pages = response.json().get("query", {}).get("pages", {})
+
+        candidates = list(pages.values())
+        random.shuffle(candidates)
+
+        for page in candidates:
+            info_list = page.get("imageinfo", [])
+            if not info_list:
+                continue
+
+            info = info_list[0]
+            mime = info.get("mime", "")
+
+            if mime not in ("image/jpeg", "image/png", "image/webp"):
+                continue
+
+            if info.get("width", 0) < 500:
+                continue
+
+            metadata = info.get("extmetadata", {})
+            license_name = metadata.get("LicenseShortName", {}).get(
+                "value", ""
+            )
+            license_lower = license_name.lower()
+
+            allowed = (
+                "cc0" in license_lower
+                or "public domain" in license_lower
+                or "cc by" in license_lower
+            )
+
+            if not allowed:
+                continue
+
+            return {
+                "url": info["url"],
+                "title": page.get("title", "Fotografía"),
+                "license": license_name,
+                "artist": metadata.get("Artist", {}).get(
+                    "value", "Autor no indicado"
+                ),
+                "license_url": metadata.get("LicenseUrl", {}).get(
+                    "value", ""
+                ),
+                "page_url": info.get("descriptionurl", ""),
+            }
+
+    except Exception as error:
+        print(f"No se pudo buscar la fotografía: {error}")
+
+    return None
+
+
+def download_photo(photo, index):
+    if not photo:
+        return None
+
+    try:
+        response = requests.get(
+            photo["url"],
+            headers={"User-Agent": "NelsonLuchaReels/1.0"},
+            timeout=30
+        )
+        response.raise_for_status()
+
+        image = Image.open(io.BytesIO(response.content))
+        image.load()
+        image = image.convert("RGB")
+
+        path = PHOTOS / f"foto_{index}.jpg"
+        image.save(path, quality=92)
+
+        return path
+
+    except Exception as error:
+        print(f"No se pudo descargar la fotografía: {error}")
+        return None
+
+
+# ==================================================
+# FONDO REALISTA Y MOVIMIENTO SUAVE
+# ==================================================
+
+def prepare_photo(path):
+    if path and path.exists():
+        try:
+            image = Image.open(path).convert("RGB")
+            image = ImageOpsFit(image, WIDTH, HEIGHT)
+            return image
+        except Exception:
+            pass
+
+    # Fondo fotográfico neutro si no se consigue una imagen.
+    # Se evita presentar un dibujo como si fuera una fotografía.
+    image = Image.new("RGB", (WIDTH, HEIGHT), (38, 42, 53))
+    draw = ImageDraw.Draw(image)
+    draw.text(
+        (WIDTH // 2, HEIGHT // 2),
+        "¡ESPERA EL REMATE!",
+        font=get_font(36),
+        fill="white",
+        anchor="mm"
+    )
+    return image
+
+
+def ImageOpsFit(image, width, height):
+    from PIL import ImageOps
+    return ImageOps.fit(
+        image,
+        (width, height),
+        method=Image.Resampling.LANCZOS,
+        centering=(0.5, 0.45)
+    )
+
+
+def cinematic_frame(photo, progress):
+    # Efecto de acercamiento progresivo para que la escena
+    # tenga movimiento, aunque la fuente sea una fotografía.
+    zoom = 1.0 + (0.045 * progress)
+    crop_w = int(WIDTH / zoom)
+    crop_h = int(HEIGHT / zoom)
+
+    left = (WIDTH - crop_w) // 2
+    top = (HEIGHT - crop_h) // 2
+
+    frame = photo.crop((
+        left,
+        top,
+        left + crop_w,
+        top + crop_h
+    ))
+    frame = frame.resize(
+        (WIDTH, HEIGHT),
+        Image.Resampling.LANCZOS
+    )
+
+    # Contraste moderado y oscurecimiento para leer el texto.
+    frame = ImageEnhance.Contrast(frame).enhance(1.08)
+    shade = Image.new("RGBA", (WIDTH, HEIGHT), (0, 0, 0, 55))
+    frame = Image.alpha_composite(frame.convert("RGBA"), shade)
+
+    # Degradado oscuro en la zona inferior.
+    overlay = Image.new("RGBA", (WIDTH, HEIGHT), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(overlay)
+
+    for y in range(HEIGHT // 2, HEIGHT):
+        alpha = int(150 * ((y - HEIGHT // 2) / (HEIGHT // 2)))
+        draw.line((0, y, WIDTH, y), fill=(0, 0, 0, alpha))
+
+    return Image.alpha_composite(frame, overlay)
+
+
+# ==================================================
+# TEXTO Y MARCA DE AGUA
+# ==================================================
+
+def draw_centered(draw, text, y, font, fill, stroke_width=2):
+    draw.text(
+        (WIDTH // 2, y),
+        text,
+        font=font,
+        fill=fill,
+        anchor="mm",
+        align="center",
+        stroke_width=stroke_width,
+        stroke_fill=(0, 0, 0, 230)
+    )
+
+
+def wrap_text(draw, text, font, max_width):
+    words = text.split()
     lines = []
     current = ""
 
-    for word in text.split():
+    for word in words:
         test = f"{current} {word}".strip()
-        width = draw.textbbox((0, 0), test, font=fnt)[2]
-
-        if width <= max_width:
+        if draw.textbbox((0, 0), test, font=font)[2] <= max_width:
             current = test
         else:
             if current:
@@ -156,484 +342,261 @@ def draw_centered(draw, text, y, fnt, color, max_width=630):
     if current:
         lines.append(current)
 
-    for line in lines:
-        box = draw.textbbox(
-            (0, 0), line, font=fnt, stroke_width=2
-        )
-        x = (WIDTH - (box[2] - box[0])) // 2
+    return lines
 
+
+def draw_panel(draw, y, text, font, fill, max_width=620):
+    lines = wrap_text(draw, text, font, max_width)
+    line_height = 57
+    height = len(lines) * line_height + 34
+
+    draw.rounded_rectangle(
+        (35, y - height // 2, WIDTH - 35, y + height // 2),
+        radius=24,
+        fill=(0, 0, 0, 170),
+        outline=(255, 255, 255, 80),
+        width=2
+    )
+
+    start_y = y - ((len(lines) - 1) * line_height) // 2
+
+    for index, line in enumerate(lines):
         draw.text(
-            (x, y),
+            (WIDTH // 2, start_y + index * line_height),
             line,
-            font=fnt,
-            fill=color,
+            font=font,
+            fill=fill,
+            anchor="mm",
             stroke_width=2,
-            stroke_fill="#151515",
+            stroke_fill=(0, 0, 0, 240)
         )
 
-        y += fnt.size + 10
 
-    return y
+def render_frame(photo, joke, scene_index, progress, local_time):
+    frame = cinematic_frame(photo, progress)
+    draw = ImageDraw.Draw(frame, "RGBA")
 
-
-# =====================================================
-# FOTOGRAFÍAS GRATUITAS DE WIKIMEDIA COMMONS
-# =====================================================
-
-def search_photo(query):
-    endpoint = "https://commons.wikimedia.org/w/api.php"
-
-    params = {
-        "action": "query",
-        "generator": "search",
-        "gsrsearch": query,
-        "gsrnamespace": 6,
-        "gsrlimit": 20,
-        "prop": "imageinfo",
-        "iiprop": "url|mime|extmetadata",
-        "iiurlwidth": 900,
-        "format": "json",
-    }
-
-    headers = {
-        "User-Agent": "NelsonLuchaReels/1.0"
-    }
-
-    response = requests.get(
-        endpoint,
-        params=params,
-        headers=headers,
-        timeout=25,
-    )
-    response.raise_for_status()
-
-    data = response.json()
-    pages = list(
-        data.get("query", {}).get("pages", {}).values()
-    )
-    random.shuffle(pages)
-
-    for page in pages:
-        infos = page.get("imageinfo", [])
-        if not infos:
-            continue
-
-        info = infos[0]
-        mime = info.get("mime", "")
-
-        if mime not in (
-            "image/jpeg",
-            "image/png",
-            "image/webp",
-        ):
-            continue
-
-        metadata = info.get("extmetadata", {})
-
-        license_name = metadata.get(
-            "LicenseShortName", {}
-        ).get("value", "")
-
-        license_lower = license_name.lower()
-
-        # Aceptar licencias abiertas conocidas.
-        allowed = (
-            "cc by" in license_lower
-            or "cc0" in license_lower
-            or "public domain" in license_lower
-        )
-
-        if not allowed:
-            continue
-
-        image_url = info.get("thumburl") or info.get("url")
-
-        if not image_url:
-            continue
-
-        return {
-            "url": image_url,
-            "title": page.get("title", "Fotografía"),
-            "artist": metadata.get(
-                "Artist", {}
-            ).get("value", "No indicado"),
-            "license": license_name,
-            "license_url": metadata.get(
-                "LicenseUrl", {}
-            ).get("value", ""),
-            "page_url": info.get("descriptionurl", ""),
-        }
-
-    return None
-
-
-def download_photo(joke, index):
-    try:
-        info = search_photo(joke["search"])
-
-        if not info:
-            print(
-                f"Escena {index + 1}: no se encontró "
-                "fotografía reutilizable."
-            )
-            return None, None
-
-        response = requests.get(
-            info["url"],
-            headers={"User-Agent": "NelsonLuchaReels/1.0"},
-            timeout=30,
-        )
-        response.raise_for_status()
-
-        path = PHOTOS / f"foto_{index + 1}.jpg"
-        path.write_bytes(response.content)
-
-        with Image.open(path) as im:
-            im.verify()
-
-        print(f"Fotografía descargada para escena {index + 1}")
-        return path, info
-
-    except Exception as error:
-        print(
-            f"Escena {index + 1}: se usará fondo alternativo. "
-            f"Detalle: {error}"
-        )
-        return None, None
-
-
-# =====================================================
-# FONDO Y MARCA DE AGUA
-# =====================================================
-
-def make_background(photo_path, index):
-    if photo_path and photo_path.exists():
-        with Image.open(photo_path) as original:
-            image = ImageOps.fit(
-                original.convert("RGB"),
-                (WIDTH, HEIGHT),
-                method=Image.Resampling.LANCZOS,
-            )
-    else:
-        colors = [
-            "#172554", "#3B0764", "#064E3B",
-            "#7C2D12", "#164E63",
-        ]
-
-        image = Image.new(
-            "RGB",
-            (WIDTH, HEIGHT),
-            colors[index % len(colors)],
-        )
-
-        draw = ImageDraw.Draw(image)
-        draw.ellipse((175, 350, 545, 720), fill="#FFD166")
-        draw.ellipse((260, 445, 305, 490), fill="#202033")
-        draw.ellipse((415, 445, 460, 490), fill="#202033")
-        draw.ellipse((305, 530, 415, 605), fill="#C0265C")
-
-    # Oscurecimiento suave para leer bien el texto.
-    shade = Image.new(
-        "RGBA", (WIDTH, HEIGHT), (0, 0, 0, 55)
-    )
-
-    return Image.alpha_composite(
-        image.convert("RGBA"), shade
-    ).convert("RGB")
-
-
-def add_watermark(image):
-    image = image.convert("RGBA")
-    layer = Image.new("RGBA", image.size, (0, 0, 0, 0))
-    draw = ImageDraw.Draw(layer)
-
-    fnt = get_font(17)
-    box = draw.textbbox((0, 0), BRAND, font=fnt)
-
-    text_width = box[2] - box[0]
-    x = (WIDTH - text_width) // 2
-    y = HEIGHT - 58
-
+    # Encabezado.
     draw.rounded_rectangle(
-        (x - 12, y - 6, x + text_width + 12, y + 27),
-        radius=10,
-        fill=(0, 0, 0, 100),
-    )
-
-    draw.text(
-        (x, y),
-        BRAND,
-        font=fnt,
-        fill=(255, 255, 255, 190),
-    )
-
-    return Image.alpha_composite(image, layer).convert("RGB")
-
-
-def add_signature_card(image, seconds_in_scene):
-    """
-    Firma elegante visible durante los últimos 1.5 segundos
-    del Reel. Utiliza una fuente cursiva disponible en Ubuntu.
-    """
-    if seconds_in_scene < 3.5:
-        return image
-
-    image = image.convert("RGBA")
-    layer = Image.new("RGBA", image.size, (0, 0, 0, 0))
-    draw = ImageDraw.Draw(layer)
-
-    # Entrada gradual de la firma.
-    opacity = int(
-        230 * min(1.0, (seconds_in_scene - 3.5) / 0.6)
-    )
-
-    draw.rounded_rectangle(
-        (95, 485, WIDTH - 95, 690),
-        radius=32,
-        fill=(12, 12, 18, min(opacity, 190)),
-        outline=(255, 255, 255, opacity),
-        width=2,
-    )
-
-    signature_font = get_font(48, italic=True)
-    box = draw.textbbox(
-        (0, 0), SIGNATURE, font=signature_font
-    )
-
-    text_width = box[2] - box[0]
-    x = (WIDTH - text_width) // 2
-    y = 525
-
-    draw.text(
-        (x + 2, y + 3),
-        SIGNATURE,
-        font=signature_font,
-        fill=(0, 0, 0, opacity),
-    )
-
-    draw.text(
-        (x, y),
-        SIGNATURE,
-        font=signature_font,
-        fill=(255, 255, 255, opacity),
-    )
-
-    subtitle_font = get_font(18)
-    subtitle = "REELS GRACIOSOS"
-
-    subtitle_box = draw.textbbox(
-        (0, 0), subtitle, font=subtitle_font
-    )
-
-    subtitle_x = (WIDTH - (subtitle_box[2] - subtitle_box[0])) // 2
-
-    draw.text(
-        (subtitle_x, 600),
-        subtitle,
-        font=subtitle_font,
-        fill=(255, 209, 102, opacity),
-    )
-
-    return Image.alpha_composite(image, layer).convert("RGB")
-
-
-# =====================================================
-# COMPONER CADA ESCENA
-# =====================================================
-
-def render_frame(joke, photo_path, scene_index, frame_index):
-    image = make_background(photo_path, scene_index)
-    draw = ImageDraw.Draw(image)
-
-    # Título
-    draw.rounded_rectangle(
-        (20, 35, WIDTH - 20, 220),
-        radius=28,
-        fill="#FFF8E7",
+        (35, 45, WIDTH - 35, 125),
+        radius=24,
+        fill=(0, 0, 0, 165)
     )
 
     draw_centered(
         draw,
         joke["title"],
-        75,
-        get_font(30),
-        "#202033",
+        85,
+        get_font(31),
+        (255, 220, 75, 255)
     )
 
-    # Texto principal y remate
+    # Texto inicial y remate, con espacio entre ambos.
+    if local_time < SCENE_SECONDS * 0.57:
+        draw_panel(
+            draw,
+            740,
+            joke["text"],
+            get_font(39),
+            (255, 255, 255, 255)
+        )
+    else:
+        draw_panel(
+            draw,
+            740,
+            joke["punch"],
+            get_font(36),
+            (255, 225, 85, 255)
+        )
+
+    # Barra de progreso de cada escena.
+    bar_x = 50
+    bar_y = 1165
+    bar_width = WIDTH - 100
+
     draw.rounded_rectangle(
-        (20, 815, WIDTH - 20, 1110),
-        radius=28,
-        fill="#FFF8E7",
+        (bar_x, bar_y, bar_x + bar_width, bar_y + 8),
+        radius=4,
+        fill=(255, 255, 255, 90)
     )
 
-    draw_centered(
-        draw,
-        joke["text"],
-        850,
-        get_font(35),
-        "#C0265C",
-    )
-
-    draw_centered(
-        draw,
-        joke["punch"],
-        980,
-        get_font(27),
-        "#202033",
+    draw.rounded_rectangle(
+        (
+            bar_x,
+            bar_y,
+            bar_x + int(bar_width * progress),
+            bar_y + 8
+        ),
+        radius=4,
+        fill=(255, 220, 65, 255)
     )
 
     # Marca de agua permanente.
-    image = add_watermark(image)
-
-    # Firma personal al final del tercer segmento.
-    scene_frame = frame_index % (FPS * SCENE_SECONDS)
-    seconds_in_scene = scene_frame / FPS
-
-    if scene_index == TOTAL_SCENES - 1:
-        image = add_signature_card(image, seconds_in_scene)
-
-    return image
-
-
-# =====================================================
-# NARRACIÓN
-# =====================================================
-
-async def create_voice(selected_jokes):
-    narration = " ".join(
-        joke["voice"] for joke in selected_jokes
+    draw.rounded_rectangle(
+        (65, 1190, WIDTH - 65, 1245),
+        radius=20,
+        fill=(0, 0, 0, 185),
+        outline=(255, 255, 255, 60),
+        width=1
     )
 
-    communicator = edge_tts.Communicate(
+    draw_centered(
+        draw,
+        BRAND,
+        1217,
+        get_font(19),
+        (255, 255, 255, 255),
+        stroke_width=1
+    )
+
+    # Firma elegante al final de cada escena.
+    if local_time >= SCENE_SECONDS - 1.3:
+        alpha = int(
+            255 * min(1, (local_time - (SCENE_SECONDS - 1.3)) / 0.5)
+        )
+        draw.rounded_rectangle(
+            (145, 985, WIDTH - 145, 1060),
+            radius=25,
+            fill=(0, 0, 0, 175)
+        )
+        draw.text(
+            (WIDTH // 2, 1022),
+            SIGNATURE,
+            font=get_font(31, italic=True),
+            fill=(255, 235, 170, alpha),
+            anchor="mm",
+            stroke_width=1,
+            stroke_fill=(0, 0, 0, 200)
+        )
+
+    return frame.convert("RGB")
+
+
+# ==================================================
+# NARRACIÓN
+# ==================================================
+
+async def create_voice(jokes):
+    narration = " ".join(joke["voice"] for joke in jokes)
+
+    # Voz algo rápida para que entren los chistes sin
+    # perder claridad.
+    communicate = edge_tts.Communicate(
         narration,
         VOICE,
-        rate="+20%",
-        volume="+0%",
+        rate="+12%",
+        volume="+0%"
     )
+    await communicate.save(str(AUDIO))
 
-    await communicator.save(str(AUDIO))
+
+# ==================================================
+# CRÉDITOS DE FOTOGRAFÍAS
+# ==================================================
+
+def save_credits(photos):
+    path = OUT / "creditos_imagenes.txt"
+
+    with open(path, "w", encoding="utf-8") as file:
+        file.write("CRÉDITOS DE LAS FOTOGRAFÍAS\n")
+        file.write("===========================\n\n")
+
+        for index, photo in enumerate(photos, start=1):
+            if not photo:
+                file.write(f"Escena {index}: no se obtuvo fotografía.\n\n")
+                continue
+
+            file.write(f"Escena {index}\n")
+            file.write(f"Archivo: {photo['title']}\n")
+            file.write(f"Autor: {photo['artist']}\n")
+            file.write(f"Licencia: {photo['license']}\n")
+            file.write(f"Licencia URL: {photo['license_url']}\n")
+            file.write(f"Página: {photo['page_url']}\n\n")
 
 
-# =====================================================
-# CREAR EL MP4 DE 15 SEGUNDOS
-# =====================================================
-
-def run_command(command):
-    result = subprocess.run(
-        command,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-    )
-
-    if result.returncode != 0:
-        raise RuntimeError(result.stderr[-3500:])
-
+# ==================================================
+# GENERACIÓN DEL VIDEO
+# ==================================================
 
 def main():
-    if FRAMES.exists():
-        shutil.rmtree(FRAMES)
+    print("Preparando un Reel de 30 segundos...")
 
-    FRAMES.mkdir(parents=True, exist_ok=True)
-    PHOTOS.mkdir(parents=True, exist_ok=True)
+    selected = random.sample(JOKES, SCENES)
+    photos = []
+    backgrounds = []
 
-    # Evitar restos de una ejecución anterior.
-    if VIDEO.exists():
-        VIDEO.unlink()
+    for index, joke in enumerate(selected, start=1):
+        print(f"Buscando fotografía para escena {index}...")
+        photo_info = search_photo(joke["query"])
+        photos.append(photo_info)
 
-    if AUDIO.exists():
-        AUDIO.unlink()
+        photo_path = download_photo(photo_info, index)
+        backgrounds.append(prepare_photo(photo_path))
 
-    # Seleccionar tres chistes sin repetir dentro del Reel.
-    selected = random.sample(JOKES, TOTAL_SCENES)
-
-    print("Chistes seleccionados:")
-    for item in selected:
-        print("-", item["title"])
-
-    print("Buscando fotografías...")
-    photo_paths = []
-    credits = []
-
-    for index, joke in enumerate(selected):
-        photo_path, info = download_photo(joke, index)
-        photo_paths.append(photo_path)
-
-        if info:
-            credits.append(
-                f"Escena {index + 1}: {info['title']}\n"
-                f"Autor: {info['artist']}\n"
-                f"Licencia: {info['license']}\n"
-                f"Enlace de licencia: {info['license_url']}\n"
-                f"Fuente: {info['page_url']}\n"
-            )
-        else:
-            credits.append(
-                f"Escena {index + 1}: fondo gráfico de respaldo.\n"
-            )
-
-    CREDITS.write_text(
-        "\n".join(credits),
-        encoding="utf-8",
-    )
+    save_credits(photos)
 
     print("Generando narración en español...")
     asyncio.run(create_voice(selected))
 
-    print("Creando 180 cuadros...")
+    total_frames = DURATION * FPS
     frame_number = 0
 
+    print("Creando escenas con movimiento...")
+
     for scene_index, joke in enumerate(selected):
-        for _ in range(FPS * SCENE_SECONDS):
+        background = backgrounds[scene_index]
+
+        for frame_in_scene in range(int(SCENE_SECONDS * FPS)):
+            progress = frame_in_scene / max(
+                1, int(SCENE_SECONDS * FPS) - 1
+            )
+            local_time = frame_in_scene / FPS
+
             frame = render_frame(
+                background,
                 joke,
-                photo_paths[scene_index],
                 scene_index,
-                frame_number,
+                progress,
+                local_time
             )
 
-            frame.save(
-                FRAMES / f"frame_{frame_number:05d}.jpg",
-                quality=86,
-            )
-
+            frame_path = FRAMES / f"frame_{frame_number:05d}.jpg"
+            frame.save(frame_path, quality=90)
             frame_number += 1
 
-    print("Montando el video vertical...")
+    # Asegurar exactamente la cantidad de cuadros prevista.
     ffmpeg = imageio_ffmpeg.get_ffmpeg_exe()
+    output_pattern = str(FRAMES / "frame_%05d.jpg")
 
-    run_command([
-        ffmpeg, "-y",
+    command = [
+        ffmpeg,
+        "-y",
         "-framerate", str(FPS),
-        "-i", str(FRAMES / "frame_%05d.jpg"),
+        "-i", output_pattern,
         "-i", str(AUDIO),
-        "-vf", "scale=720:1280,format=yuv420p",
-        "-r", str(FPS),
+        "-vf", "format=yuv420p",
         "-c:v", "libx264",
         "-preset", "ultrafast",
-        "-crf", "27",
+        "-crf", "24",
         "-c:a", "aac",
-        "-b:a", "96k",
-        "-af", "apad",
-        "-t", str(TOTAL_SCENES * SCENE_SECONDS),
+        "-b:a", "128k",
+        "-af", f"apad,atrim=0:{DURATION}",
+        "-t", str(DURATION),
+        "-shortest",
         "-movflags", "+faststart",
-        str(VIDEO),
-    ])
+        str(VIDEO)
+    ]
 
-    shutil.rmtree(FRAMES, ignore_errors=True)
+    print("Montando video y audio...")
+    subprocess.run(command, check=True)
 
-    if not VIDEO.exists() or VIDEO.stat().st_size == 0:
-        raise RuntimeError("No se generó correctamente el MP4.")
+    # Limpiar los cuadros temporales para ahorrar espacio.
+    for file in FRAMES.glob("frame_*.jpg"):
+        file.unlink()
 
-    print("=" * 45)
-    print("REEL CREADO CORRECTAMENTE")
-    print(f"Archivo: {VIDEO}")
-    print("Duración prevista: 15 segundos")
-    print(f"Firma: {SIGNATURE}")
-    print(f"Marca de agua: {BRAND}")
-    print(f"Créditos: {CREDITS}")
-    print("=" * 45)
+    print(f"¡Reel terminado! Archivo: {VIDEO}")
+    print(f"Duración configurada: {DURATION} segundos")
+    print("Créditos de las fotos: salida/creditos_imagenes.txt")
 
 
 if __name__ == "__main__":
