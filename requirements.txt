@@ -1,3 +1,4 @@
 Pillow
 imageio-ffmpeg
 edge-tts
+requests
