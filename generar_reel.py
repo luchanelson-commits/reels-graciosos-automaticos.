@@ -1,97 +1,105 @@
 import asyncio
-import math
 import random
-import shutil
 import subprocess
 from pathlib import Path
+from urllib.parse import quote
 
-from PIL import Image, ImageDraw, ImageFont
+import requests
+from PIL import Image, ImageDraw, ImageFont, ImageOps
 import edge_tts
 import imageio_ffmpeg
 
-# CONFIGURACIÓN
 WIDTH, HEIGHT = 720, 1280
 FPS = 12
-SCENE_SECONDS = 5
+SCENE_SECONDS = 7
 VOICE = "es-MX-DaliaNeural"
 
 OUT = Path("salida")
 FRAMES = OUT / "frames"
+PHOTOS = OUT / "fotos"
 VIDEO = OUT / "reel_gracioso.mp4"
 AUDIO = OUT / "narracion.mp3"
+CREDITS = OUT / "creditos_imagenes.txt"
 
 SCENES = [
     {
-        "title": "CUANDO COBRO",
-        "text": "ESTA VEZ SÍ VOY A AHORRAR",
-        "punch": "¿QUIÉN SE LLEVÓ MI DINERO?",
-        "voice": "Cuando cobro digo: esta vez sí voy a ahorrar. Diez minutos después: ¿quién se llevó mi dinero?"
+        "search": "funny dog",
+        "title": "CUANDO DIGO QUE VOY A MADURAR",
+        "text": "HOY SÍ SERÉ RESPONSABLE",
+        "punch": "PERO MI PERRO TIENE OTROS PLANES 😂",
+        "voice": "Hoy sí voy a ser una persona responsable. Pero mi perro me mira como diciendo: primero juega conmigo, jefe."
     },
     {
-        "title": "EL LUNES EMPIEZO",
-        "text": "DIETA, EJERCICIO Y DISCIPLINA",
-        "punch": "PERO HOY HAY PUPUSAS",
-        "voice": "El lunes empiezo la dieta, el ejercicio y la disciplina. Pero hoy hay pupusas, y uno tiene prioridades."
+        "search": "funny cat",
+        "title": "YO CUANDO ESCUCHO UN RUIDO",
+        "text": "NO TENGO MIEDO",
+        "punch": "PERO YA ESTOY DETRÁS DE LA PUERTA",
+        "voice": "Yo diciendo que no tengo miedo. Pero escucho un ruido en la noche y ya estoy escondido detrás de la puerta."
     },
     {
-        "title": "SOLO UN VIDEO MÁS",
-        "text": "YA ME VOY A DORMIR",
-        "punch": "¡SON LAS TRES DE LA MAÑANA!",
-        "voice": "Yo diciendo que ya me voy a dormir. Solo un video más. De repente, ¡son las tres de la mañana!"
+        "search": "funny surprised face",
+        "title": "CUANDO VEO MI SALDO",
+        "text": "YO ME SENTÍA MILLONARIO",
+        "punch": "MI CUENTA NO ESTÁ DE ACUERDO",
+        "voice": "Yo me sentía millonario hasta que revisé mi saldo. Mi cuenta bancaria me aterrizó más rápido que un avión."
     },
     {
-        "title": "CUANDO ME ESCRIBE MI EX",
-        "text": "YA LO SUPERÉ",
-        "punch": "¿Y SI LE DIGO HOLA?",
-        "voice": "Cuando me escribe mi ex, digo que ya lo superé. Pero mi dedo pregunta: ¿y si le digo hola?"
+        "search": "funny person sleeping",
+        "title": "SOLO CINCO MINUTITOS MÁS",
+        "text": "YA ME LEVANTO",
+        "punch": "TRES HORAS DESPUÉS...",
+        "voice": "La alarma suena y digo: cinco minutitos más. Cuando abro los ojos, ya casi tengo que preparar la cena."
     },
     {
-        "title": "HACIENDO PLANES",
-        "text": "MAÑANA SERÉ PRODUCTIVO",
-        "punch": "MEJOR EMPIEZO EL LUNES",
-        "voice": "Mañana seré productivo, ordenado y puntual. Bueno, mejor empiezo el lunes. ¡Este lunes sí!"
+        "search": "funny monkey",
+        "title": "CUANDO INTENTO HACER EJERCICIO",
+        "text": "HOY SÍ VOY AL GIMNASIO",
+        "punch": "ME CANSÉ BUSCANDO LOS ZAPATOS",
+        "voice": "Hoy sí voy al gimnasio. Pero me cansé buscando los zapatos deportivos. Creo que ya hice suficiente calentamiento."
     },
     {
-        "title": "CUANDO DICEN: TRANQUILO",
-        "text": "YO ESTOY MUY TRANQUILO",
-        "punch": "PERO POR DENTRO: ¡AAAAH!",
-        "voice": "Cuando me dicen tranquilo, yo respondo que estoy tranquilo. Pero por dentro estoy gritando como loco."
+        "search": "funny baby expression",
+        "title": "CUANDO ME PIDEN UN FAVOR",
+        "text": "CLARO, YO TE AYUDO",
+        "punch": "¿Y QUIÉN ME AYUDA A MÍ? 😂",
+        "voice": "Claro que te ayudo, digo con una sonrisa. Por dentro estoy calculando cómo voy a resolver todo lo que ya tengo pendiente."
     },
     {
-        "title": "MI CUENTA BANCARIA",
-        "text": "YO: SOY MILLONARIO",
-        "punch": "MI SALDO: JA, JA, JA",
-        "voice": "Yo me siento millonario hasta que reviso mi cuenta bancaria. Mi saldo se ríe de mí."
+        "search": "funny goat",
+        "title": "YO DANDO CONSEJOS",
+        "text": "HAY QUE ORGANIZAR LA VIDA",
+        "punch": "YO: NO SÉ NI DÓNDE DEJÉ LAS LLAVES",
+        "voice": "Yo dando consejos sobre cómo organizar la vida. Mientras tanto, llevo veinte minutos buscando las llaves que tengo en la mano."
     },
     {
-        "title": "CUANDO LIMPIO LA CASA",
-        "text": "HOY SÍ TERMINO TODO",
-        "punch": "ENCUENTRO EL CELULAR Y ADIÓS",
-        "voice": "Hoy sí voy a limpiar toda la casa. Encuentro mi celular, reviso un mensaje y se acabó la jornada."
+        "search": "funny person reaction",
+        "title": "CUANDO DICEN: ES RÁPIDO",
+        "text": "SON SOLO CINCO MINUTOS",
+        "punch": "NOS VEMOS EL PRÓXIMO AÑO",
+        "voice": "Cuando alguien dice que solo serán cinco minutos, yo ya sé que debo llevar agua, comida y paciencia para toda la tarde."
     },
 ]
 
 
-def get_font(size):
-    paths = [
+def font(size):
+    candidates = [
         "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
         "/usr/share/fonts/truetype/liberation2/LiberationSans-Bold.ttf",
     ]
-    for path in paths:
+    for path in candidates:
         if Path(path).exists():
             return ImageFont.truetype(path, size)
     return ImageFont.load_default()
 
 
-def draw_centered(draw, text, y, font, color, max_width=630):
-    words = text.split()
+def centered_text(draw, text, y, fnt, color, max_width=630):
     lines = []
     current = ""
 
-    for word in words:
-        test = (current + " " + word).strip()
-        if draw.textbbox((0, 0), test, font=font)[2] <= max_width:
-            current = test
+    for word in text.split():
+        trial = f"{current} {word}".strip()
+        if draw.textbbox((0, 0), trial, font=fnt)[2] <= max_width:
+            current = trial
         else:
             if current:
                 lines.append(current)
@@ -101,177 +109,270 @@ def draw_centered(draw, text, y, font, color, max_width=630):
         lines.append(current)
 
     for line in lines:
-        box = draw.textbbox((0, 0), line, font=font, stroke_width=2)
+        box = draw.textbbox((0, 0), line, font=fnt, stroke_width=2)
         x = (WIDTH - (box[2] - box[0])) // 2
         draw.text(
-            (x, y), line, font=font, fill=color,
-            stroke_width=2, stroke_fill="#171717"
+            (x, y), line, font=fnt, fill=color,
+            stroke_width=2, stroke_fill="#111111"
         )
-        y += font.size + 12
+        y += fnt.size + 10
 
     return y
 
 
-def draw_character(draw, cx, cy, index, motion):
-    skin_colors = ["#FFD166", "#F4B183", "#FFADAD", "#C9A0FF"]
-    shirt_colors = ["#EF476F", "#118AB2", "#06D6A0", "#F59E0B"]
+def search_commons(query):
+    url = "https://commons.wikimedia.org/w/api.php"
+    params = {
+        "action": "query",
+        "generator": "search",
+        "gsrsearch": query,
+        "gsrnamespace": 6,
+        "gsrlimit": 15,
+        "gsrwhat": "text",
+        "prop": "imageinfo",
+        "iiprop": "url|mime|extmetadata",
+        "iiurlwidth": 900,
+        "format": "json",
+    }
+    headers = {
+        "User-Agent": "ReelsGraciososCreator/1.0 (personal creative project)"
+    }
 
-    skin = skin_colors[index % len(skin_colors)]
-    shirt = shirt_colors[index % len(shirt_colors)]
-
-    # Brazos y cuerpo
-    draw.line(
-        (cx - 45, cy + 105, cx - 115, cy + 145 + motion),
-        fill=skin, width=25
+    response = requests.get(
+        url, params=params, headers=headers, timeout=25
     )
-    draw.line(
-        (cx + 45, cy + 105, cx + 115, cy + 145 - motion),
-        fill=skin, width=25
-    )
-    draw.rounded_rectangle(
-        (cx - 65, cy + 65, cx + 65, cy + 235),
-        radius=30, fill=shirt
-    )
+    response.raise_for_status()
+    data = response.json()
 
-    # Cabeza
-    r = 82
-    draw.ellipse(
-        (cx-r, cy-r, cx+r, cy+r),
-        fill=skin, outline="#202033", width=5
-    )
+    pages = list(data.get("query", {}).get("pages", {}).values())
+    random.shuffle(pages)
 
-    # Ojos
-    draw.ellipse((cx-40, cy-25, cx-15, cy+8), fill="#202033")
-    draw.ellipse((cx+15, cy-25, cx+40, cy+8), fill="#202033")
+    for page in pages:
+        infos = page.get("imageinfo", [])
+        if not infos:
+            continue
 
-    # Boca cómica
-    if index % 2 == 0:
-        draw.ellipse((cx-28, cy+22, cx+28, cy+62), fill="#7A284B")
+        info = infos[0]
+        mime = info.get("mime", "")
+        if mime not in ("image/jpeg", "image/png", "image/webp"):
+            continue
+
+        meta = info.get("extmetadata", {})
+        license_name = meta.get("LicenseShortName", {}).get("value", "")
+        license_url = meta.get("LicenseUrl", {}).get("value", "")
+        artist = meta.get("Artist", {}).get("value", "")
+        description_url = info.get("descriptionurl", "")
+
+        # Solo licencias abiertas conocidas o dominio público.
+        allowed = (
+            "CC BY" in license_name
+            or "CC0" in license_name
+            or "Public domain" in license_name.lower()
+            or "Public Domain" in license_name
+        )
+        if not allowed:
+            continue
+
+        image_url = info.get("thumburl") or info.get("url")
+        if not image_url:
+            continue
+
+        return {
+            "url": image_url,
+            "title": page.get("title", "Imagen"),
+            "artist": artist,
+            "license": license_name,
+            "license_url": license_url,
+            "page_url": description_url,
+        }
+
+    return None
+
+
+def download_photo(scene, index):
+    headers = {
+        "User-Agent": "ReelsGraciososCreator/1.0 (personal creative project)"
+    }
+
+    try:
+        result = search_commons(scene["search"])
+        if not result:
+            print(f"No se encontró foto reutilizable: {scene['search']}")
+            return None
+
+        response = requests.get(
+            result["url"], headers=headers, timeout=30
+        )
+        response.raise_for_status()
+
+        path = PHOTOS / f"foto_{index:02d}.jpg"
+        path.write_bytes(response.content)
+
+        with Image.open(path) as img:
+            img.verify()
+
+        return path, result
+
+    except Exception as exc:
+        print(f"Foto no disponible para escena {index + 1}: {exc}")
+        return None
+
+
+def make_background(photo_path, index, frame_index):
+    if photo_path and photo_path.exists():
+        with Image.open(photo_path) as original:
+            image = ImageOps.fit(
+                original.convert("RGB"),
+                (WIDTH, HEIGHT),
+                method=Image.Resampling.LANCZOS
+            )
     else:
-        draw.arc(
-            (cx-38, cy+15, cx+38, cy+60),
-            start=5, end=175, fill="#202033", width=6
+        colors = [
+            "#172554", "#3B0764", "#064E3B", "#7C2D12",
+            "#164E63", "#831843", "#312E81", "#14532D"
+        ]
+        image = Image.new(
+            "RGB", (WIDTH, HEIGHT), colors[index % len(colors)]
         )
+        draw = ImageDraw.Draw(image)
+        draw.ellipse((180, 340, 540, 700), fill="#FFD166")
+        draw.ellipse((260, 440, 305, 490), fill="#202033")
+        draw.ellipse((410, 440, 455, 490), fill="#202033")
+        draw.ellipse((310, 520, 410, 590), fill="#C0265C")
+
+    # Oscurecer ligeramente para que los subtítulos contrasten.
+    shade = Image.new("RGBA", (WIDTH, HEIGHT), (0, 0, 0, 65))
+    image = Image.alpha_composite(image.convert("RGBA"), shade)
+    return image.convert("RGB")
 
 
-def make_scene(scene, index, frame_number):
-    backgrounds = [
-        "#172554", "#3B0764", "#064E3B", "#7C2D12",
-        "#164E63", "#831843", "#312E81", "#14532D"
-    ]
-    img = Image.new("RGB", (WIDTH, HEIGHT), backgrounds[index % len(backgrounds)])
-    draw = ImageDraw.Draw(img)
+def render_frame(scene, photo_path, index, frame_index):
+    image = make_background(photo_path, index, frame_index)
+    draw = ImageDraw.Draw(image)
 
-    # Decoración aleatoria pero estable por escena
-    random.seed(index + 123)
-    for _ in range(24):
-        x = random.randint(0, WIDTH)
-        y = random.randint(0, HEIGHT)
-        r = random.randint(7, 18)
-        color = random.choice(
-            ["#FFD166", "#FF70A6", "#70D6FF", "#E9FF70"]
-        )
-        draw.ellipse((x-r, y-r, x+r, y+r), fill=color)
-
-    # Título
+    # Título superior
     draw.rounded_rectangle(
-        (25, 35, WIDTH-25, 210), radius=28, fill="#FFF8E7"
+        (20, 30, WIDTH - 20, 225),
+        radius=28, fill="#FFF8E7"
     )
-    draw_centered(
-        draw, scene["title"], 80, get_font(34), "#202033"
+    centered_text(
+        draw, scene["title"], 65, font(32), "#202033"
     )
 
-    # Personaje con pequeño movimiento
-    seconds = frame_number / FPS
-    motion = int(12 * math.sin(seconds * 5))
-    draw_character(draw, WIDTH // 2, 440, index, motion)
-
-    # Texto principal
+    # Panel principal
     draw.rounded_rectangle(
-        (25, 770, WIDTH-25, 1100), radius=30, fill="#FFF8E7"
+        (20, 800, WIDTH - 20, 1115),
+        radius=30, fill="#FFF8E7"
     )
-    draw_centered(
-        draw, scene["text"], 815, get_font(36), "#C0265C"
+    centered_text(
+        draw, scene["text"], 840, font(37), "#C0265C"
     )
-    draw_centered(
-        draw, scene["punch"], 965, get_font(30), "#202033"
+    centered_text(
+        draw, scene["punch"], 985, font(29), "#202033"
     )
 
     draw.text(
         (WIDTH // 2, 1180),
-        "😂 COMPARTE Y ETIQUETA A TUS AMIGOS",
-        font=get_font(19), fill="white", anchor="mm"
+        "😂 COMPARTE CON TUS AMIGOS",
+        font=font(20), fill="white", anchor="mm",
+        stroke_width=2, stroke_fill="#111111"
     )
 
-    return img
+    return image
 
 
-async def create_voice():
-    narration = " ".join(scene["voice"] for scene in SCENES)
-    speaker = edge_tts.Communicate(
-        narration, VOICE, rate="+8%", volume="+0%"
+async def create_narration():
+    text = " ".join(scene["voice"] for scene in SCENES)
+    communicator = edge_tts.Communicate(
+        text, VOICE, rate="+8%", volume="+0%"
     )
-    await speaker.save(str(AUDIO))
+    await communicator.save(str(AUDIO))
 
 
 def run_command(command):
     result = subprocess.run(
-        command, stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE, text=True
+        command,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True
     )
-    if result.returncode != 0:
-        raise RuntimeError(result.stderr[-4000:])
+    if result.returncode:
+        raise RuntimeError(result.stderr[-3500:])
 
 
 def main():
-    OUT.mkdir(parents=True, exist_ok=True)
+    OUT.mkdir(exist_ok=True)
+    PHOTOS.mkdir(exist_ok=True)
 
     if FRAMES.exists():
+        import shutil
         shutil.rmtree(FRAMES)
     FRAMES.mkdir(parents=True)
 
-    print("Creando narración en español...")
-    asyncio.run(create_voice())
+    credits = []
+    photos = []
 
-    print("Creando escenas...")
-    frames_per_scene = FPS * SCENE_SECONDS
-    frame_number = 0
+    print("Buscando fotografías con licencias reutilizables...")
+    for i, scene in enumerate(SCENES):
+        found = download_photo(scene, i)
+        if found:
+            photo_path, info = found
+            photos.append(photo_path)
+            credits.append(
+                f"Escena {i + 1}: {info['title']}\n"
+                f"Autor: {info['artist']}\n"
+                f"Licencia: {info['license']} {info['license_url']}\n"
+                f"Fuente: {info['page_url']}\n"
+            )
+        else:
+            photos.append(None)
+            credits.append(
+                f"Escena {i + 1}: imagen gráfica de respaldo creada por el script.\n"
+            )
+
+    CREDITS.write_text("\n".join(credits), encoding="utf-8")
+
+    print("Generando narración en español...")
+    asyncio.run(create_narration())
+
+    print("Creando escenas verticales...")
+    number = 0
 
     for scene_index, scene in enumerate(SCENES):
-        for _ in range(frames_per_scene):
-            img = make_scene(scene, scene_index, frame_number)
-            img.save(FRAMES / f"frame_{frame_number:05d}.png")
-            frame_number += 1
+        for _ in range(FPS * SCENE_SECONDS):
+            image = render_frame(
+                scene, photos[scene_index], scene_index, number
+            )
+            image.save(FRAMES / f"frame_{number:05d}.jpg", quality=85)
+            number += 1
 
-    print("Generando archivo MP4...")
+    print("Montando MP4...")
     ffmpeg = imageio_ffmpeg.get_ffmpeg_exe()
     duration = len(SCENES) * SCENE_SECONDS
 
     run_command([
         ffmpeg, "-y",
         "-framerate", str(FPS),
-        "-i", str(FRAMES / "frame_%05d.png"),
+        "-i", str(FRAMES / "frame_%05d.jpg"),
         "-i", str(AUDIO),
         "-vf", "scale=720:1280,format=yuv420p",
         "-r", str(FPS),
         "-c:v", "libx264",
         "-preset", "ultrafast",
-        "-crf", "28",
+        "-crf", "27",
         "-c:a", "aac",
         "-b:a", "96k",
         "-af", "apad",
         "-t", str(duration),
         "-movflags", "+faststart",
-        str(VIDEO),
+        str(VIDEO)
     ])
 
+    import shutil
     shutil.rmtree(FRAMES, ignore_errors=True)
 
-    if not VIDEO.exists() or VIDEO.stat().st_size == 0:
-        raise RuntimeError("No se encontró el video MP4 generado.")
-
-    print(f"¡REEL CREADO! Archivo: {VIDEO}")
-    print(f"Tamaño: {VIDEO.stat().st_size // 1024} KB")
+    print(f"REEL CREADO: {VIDEO}")
+    print(f"CRÉDITOS DE IMÁGENES: {CREDITS}")
 
 
 if __name__ == "__main__":
